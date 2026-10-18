@@ -1,0 +1,135 @@
+import { Theme } from "../theme.slint";
+import { SubscriptionData } from "../state.slint";
+import { IconButton, PillButton } from "buttons.slint";
+
+export component SubItem inherits Rectangle {
+    in property <SubscriptionData> data;
+
+    callback open();
+    callback refresh();
+    callback remove();
+
+    private property <bool> confirm-delete;
+
+    height: data.progress >= 0 ? 78px : 64px;
+    border-radius: 12px;
+    background: touch.has-hover ? Theme.surface-raised : Theme.surface;
+    border-width: 1px;
+    border-color: touch.has-hover ? Theme.border-strong : Theme.border;
+    animate background, border-color { duration: 100ms; }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.open(); }
+    }
+
+    VerticalLayout {
+        padding: 12px;
+        padding-right: 6px;
+        spacing: 8px;
+
+        HorizontalLayout {
+            spacing: 4px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 2px;
+
+                Text {
+                    text: data.name;
+                    font-size: 14px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+
+                Text {
+                    text: data.updating ? "Updating…" : data.count + " configs · " + data.updated
+                        + (data.progress < 0 ? " · " + data.usage : "");
+                    font-size: 11px;
+                    color: Theme.text-muted;
+                    overflow: elide;
+                }
+            }
+
+            if !root.confirm-delete: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: @image-url("../../assets/icons/MdiRefresh.svg");
+                    size: 16px;
+                    enabled: !data.updating;
+                    spinning: data.updating;
+                    clicked => { root.refresh(); }
+                }
+            }
+
+            if !root.confirm-delete: VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: @image-url("../../assets/icons/MdiDelete.svg");
+                    size: 16px;
+                    hover-color: Theme.danger;
+                    clicked => { root.confirm-delete = true; }
+                }
+            }
+
+            if root.confirm-delete: VerticalLayout {
+                alignment: center;
+                PillButton {
+                    text: "Delete";
+                    danger: true;
+                    clicked => {
+                        root.confirm-delete = false;
+                        root.remove();
+                    }
+                }
+            }
+
+            if root.confirm-delete: VerticalLayout {
+                alignment: center;
+                PillButton {
+                    text: "Keep";
+                    clicked => { root.confirm-delete = false; }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                IconButton {
+                    icon: @image-url("../../assets/icons/MdiChevronRight.svg");
+                    size: 18px;
+                    clicked => { root.open(); }
+                }
+            }
+        }
+
+        if data.progress >= 0: HorizontalLayout {
+            padding-right: 8px;
+            spacing: 10px;
+
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+
+                Rectangle {
+                    height: 4px;
+                    border-radius: 2px;
+                    background: Theme.surface-hover;
+
+                    Rectangle {
+                        x: 0;
+                        width: parent.width * min(1, data.progress);
+                        border-radius: 2px;
+                        background: data.progress > 0.9 ? Theme.danger : @linear-gradient(90deg, Theme.accent 0%, Theme.accent-alt 100%);
+                    }
+                }
+            }
+
+            Text {
+                text: data.usage + (data.expire != "" ? " · " + data.expire : "");
+                font-size: 11px;
+                color: data.expire == "Expired" ? Theme.danger : Theme.text-muted;
+            }
+        }
+    }
+}

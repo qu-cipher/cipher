@@ -1,0 +1,44 @@
+// Always dark. The accent sits close to the Fluent style's cyan, so the standard widgets
+// (LineEdit, ComboBox) match the rest of the UI.
+export global Theme {
+    out property <color> background: #0e131b;
+    // Left (connect) panel and title bar.
+    out property <color> panel: #0b1017;
+    out property <color> surface: #151c27;
+    out property <color> surface-raised: #1b2331;
+    out property <color> surface-hover: #232d3d;
+    out property <color> border: #232c3a;
+    out property <color> border-strong: #33405a;
+
+    out property <color> text: #e6ebf2;
+    out property <color> text-muted: #8a96a8;
+    out property <color> text-faint: #5f6b7d;
+
+    out property <color> accent: #5cc8ff;
+    // Second stop for accent gradients.
+    out property <color> accent-alt: #8b9dff;
+    // Text and icons drawn on the accent.
+    out property <color> on-accent: #06131d;
+    out property <color> selected: #5cc8ff1f;
+
+    out property <color> idle: #8a96a8;
+    out property <color> connecting: #f5b942;
+    out property <color> connected: #3ddc97;
+    out property <color> danger: #f47174;
+    out property <color> danger-surface: #3a1d25;
+    out property <color> danger-text: #ffd6d9;
+
+    // Badge color per protocol label (see `Profile::protocol`).
+    public pure function protocol-color(protocol: string) -> color {
+        if protocol == "vless" { return #a78bfa; }
+        if protocol == "vmess" { return #c4a1ff; }
+        if protocol == "trojan" { return #f472b6; }
+        if protocol == "ss" { return #fb923c; }
+        if protocol == "hy2" { return #2dd4bf; }
+        if protocol == "tuic" { return #38bdf8; }
+        if protocol == "anytls" { return #e879f9; }
+        if protocol == "wg" { return #a3e635; }
+        if protocol == "ovpn" { return #fcd34d; }
+        return #8a96a8;
+    }
+}

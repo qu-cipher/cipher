@@ -1,0 +1,13 @@
+# Build output (also holds the screenshot test's temporary sing-box copy)
+/target/
+
+# Editor / IDE settings
+.idea/
+.vscode/
+
+# Screenshot test frames, if written inside the repo
+*.rgba
+
+# OS clutter
+.DS_Store
+Thumbs.db

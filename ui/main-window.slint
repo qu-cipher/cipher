@@ -1,0 +1,221 @@
+import { LineEdit, TextEdit } from "std-widgets.slint";
+import "../assets/Geist.ttf";
+import { Theme } from "theme.slint";
+import { AppState, ConnectionState, ConfigData, SubscriptionData } from "state.slint";
+import { TitleBar } from "./components/title-bar.slint";
+import { PillButton } from "./components/buttons.slint";
+import { Sheet } from "./components/sheet.slint";
+import { ConnectPanel } from "./panels/connect-panel.slint";
+import { LibraryPanel } from "./panels/library-panel.slint";
+
+// Rust needs these to talk to the UI.
+export { AppState, ConnectionState, ConfigData, SubscriptionData }
+
+export component AppWindow inherits Window {
+    title: "Cipher VPN Client";
+    width: 820px;
+    height: 520px;
+    no-frame: true;
+    default-font-family: "Geist";
+    background: Theme.background;
+
+    callback minimize_window();
+    callback close_window();
+
+    // Focus the text field when a dialog opens.
+    private property <bool> sub-open: AppState.sub-dialog-open;
+    private property <bool> links-open: AppState.links-dialog-open;
+    private property <bool> creds-open: AppState.creds-dialog-open;
+    changed sub-open => { if self.sub-open { url-input.focus(); } }
+    changed links-open => { if self.links-open { links-input.focus(); } }
+    changed creds-open => { if self.creds-open { username-input.focus(); } }
+
+    VerticalLayout {
+        TitleBar {
+            title: root.title;
+            title_width: parent.width;
+            on_minimize_clicked => { minimize_window() }
+            on_close_clicked => { close_window() }
+        }
+
+        HorizontalLayout {
+            ConnectPanel { }
+
+            Rectangle {
+                width: 1px;
+                background: Theme.border;
+            }
+
+            LibraryPanel { }
+        }
+    }
+
+    // ── Add subscription ──
+    Sheet {
+        y: 30px;
+        height: root.height - 30px;
+        open: AppState.sub-dialog-open;
+        title: "Add subscription";
+        sheet-height: AppState.sub-dialog-error != "" ? 178px : 150px;
+        dismiss => {
+            if !AppState.sub-dialog-busy { AppState.sub-dialog-open = false; }
+        }
+
+        url-input := LineEdit {
+            placeholder-text: "https://…";
+            enabled: !AppState.sub-dialog-busy;
+            text <=> AppState.sub-dialog-url;
+            accepted => { AppState.add-subscription(self.text); }
+        }
+
+        if AppState.sub-dialog-error != "": Text {
+            text: AppState.sub-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                enabled: !AppState.sub-dialog-busy;
+                clicked => { AppState.sub-dialog-open = false; }
+            }
+
+            PillButton {
+                text: AppState.sub-dialog-busy ? "Fetching…" : "Add";
+                primary: true;
+                enabled: !AppState.sub-dialog-busy && AppState.sub-dialog-url != "";
+                clicked => { AppState.add-subscription(AppState.sub-dialog-url); }
+            }
+        }
+    }
+
+    // ── Add configs from share links ──
+    Sheet {
+        y: 30px;
+        height: root.height - 30px;
+        open: AppState.links-dialog-open;
+        title: "Add configs";
+        sheet-height: 270px;
+        dismiss => { AppState.links-dialog-open = false; }
+
+        Text {
+            text: "Paste vless://, vmess://, trojan://, ss://, hy2://, tuic://, anytls:// or wireguard:// links, one per line.";
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        links-input := TextEdit {
+            vertical-stretch: 1;
+            font-size: 12px;
+            wrap: char-wrap;
+            text <=> AppState.links-dialog-text;
+        }
+
+        if AppState.links-dialog-error != "": Text {
+            text: AppState.links-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.links-dialog-open = false; }
+            }
+
+            PillButton {
+                text: "Add";
+                primary: true;
+                enabled: AppState.links-dialog-text != "";
+                clicked => { AppState.add-links(AppState.links-dialog-text); }
+            }
+        }
+    }
+
+    // ── OpenVPN sign-in ──
+    Sheet {
+        y: 30px;
+        height: root.height - 30px;
+        open: AppState.creds-dialog-open;
+        title: AppState.creds-dialog-title;
+        sheet-height: AppState.creds-dialog-error != "" ? 240px : 214px;
+        dismiss => { AppState.creds-dialog-open = false; }
+
+        Text {
+            text: "This OpenVPN config asks for a username and password. They're saved with your configs.";
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        username-input := LineEdit {
+            placeholder-text: "Username";
+            text <=> AppState.creds-username;
+            accepted => { password-input.focus(); }
+        }
+
+        password-input := LineEdit {
+            placeholder-text: "Password";
+            input-type: password;
+            text <=> AppState.creds-password;
+            accepted => { AppState.submit-credentials(); }
+        }
+
+        if AppState.creds-dialog-error != "": Text {
+            text: AppState.creds-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.creds-dialog-open = false; }
+            }
+
+            PillButton {
+                text: AppState.creds-dialog-action;
+                primary: true;
+                enabled: AppState.creds-username != "";
+                clicked => { AppState.submit-credentials(); }
+            }
+        }
+    }
+
+    // ── Toast ──
+    Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height - self.height - 18px;
+        width: min(toast-text.preferred-width + 32px, root.width - 64px);
+        height: max(34px, toast-text.preferred-height + 16px);
+        border-radius: 12px;
+        background: AppState.notice-is-error ? Theme.danger-surface : Theme.surface-hover;
+        border-width: 1px;
+        border-color: AppState.notice-is-error ? Theme.danger.transparentize(50%) : Theme.border-strong;
+        opacity: AppState.notice != "" ? 1 : 0;
+        animate opacity { duration: 180ms; }
+
+        toast-text := Text {
+            width: min(self.preferred-width, root.width - 96px);
+            text: AppState.notice;
+            font-size: 12px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            color: AppState.notice-is-error ? Theme.danger-text : Theme.text;
+        }
+    }
+}

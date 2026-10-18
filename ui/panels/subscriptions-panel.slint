@@ -1,0 +1,59 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { PillButton } from "../components/buttons.slint";
+import { SubItem } from "../components/sub-item.slint";
+
+export component SubscriptionsPanel inherits VerticalLayout {
+    spacing: 8px;
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        PillButton {
+            text: "Add subscription";
+            icon: @image-url("../../assets/icons/MdiPlus.svg");
+            primary: true;
+            clicked => {
+                AppState.sub-dialog-error = "";
+                AppState.sub-dialog-open = true;
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        PillButton {
+            text: "Update all";
+            icon: @image-url("../../assets/icons/MdiRefresh.svg");
+            enabled: AppState.subscriptions.length > 0;
+            clicked => { AppState.update-all-subscriptions(); }
+        }
+    }
+
+    if AppState.subscriptions.length == 0: Text {
+        vertical-stretch: 1;
+        text: "No subscriptions yet.\nAdd your provider's subscription URL to get its configs.";
+        font-size: 13px;
+        color: Theme.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    if AppState.subscriptions.length > 0: ListView {
+        vertical-stretch: 1;
+
+        for sub[i] in AppState.subscriptions: VerticalLayout {
+            padding-bottom: 6px;
+
+            SubItem {
+                data: sub;
+                open => {
+                    AppState.show-subscription(i);
+                    AppState.current-tab = 1;
+                }
+                refresh => { AppState.update-subscription(sub.id); }
+                remove => { AppState.remove-subscription(sub.id); }
+            }
+        }
+    }
+}

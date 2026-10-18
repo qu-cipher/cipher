@@ -1,0 +1,51 @@
+import { Theme } from "../theme.slint";
+
+// A modal panel that slides up from the bottom, over a dimmed backdrop.
+export component Sheet inherits Rectangle {
+    in property <bool> open;
+    in property <string> title;
+    in property <length> sheet-height: 200px;
+
+    callback dismiss();
+
+    clip: true;
+
+    Rectangle {
+        background: #03060a;
+        opacity: root.open ? 0.65 : 0;
+        animate opacity { duration: 200ms; }
+    }
+
+    if root.open: TouchArea {
+        clicked => { root.dismiss(); }
+    }
+
+    Rectangle {
+        x: 16px;
+        y: root.open ? root.height - self.height - 16px : root.height + 8px;
+        width: root.width - 32px;
+        height: root.sheet-height;
+        animate y { duration: 220ms; easing: ease-out; }
+
+        background: Theme.surface-raised;
+        border-radius: 16px;
+        border-width: 1px;
+        border-color: Theme.border-strong;
+
+        // Keeps clicks inside the sheet from reaching the backdrop.
+        TouchArea { }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            Text {
+                text: root.title;
+                font-size: 15px;
+                font-weight: 700;
+            }
+
+            @children
+        }
+    }
+}

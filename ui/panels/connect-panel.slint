@@ -1,0 +1,189 @@
+import { Theme } from "../theme.slint";
+import { AppState, ConnectionState } from "../state.slint";
+import { ProtocolBadge } from "../components/buttons.slint";
+import { TabBar } from "../components/tab-bar.slint";
+
+export component ConnectPanel inherits Rectangle {
+    width: 300px;
+    background: Theme.panel;
+
+    private property <ConnectionState> state: AppState.connection;
+    private property <bool> connected: state == ConnectionState.connected;
+    private property <bool> busy: state == ConnectionState.connecting || state == ConnectionState.disconnecting;
+    private property <color> tint: connected ? Theme.connected : busy ? Theme.connecting : Theme.idle;
+    // The ring's color: the accent invites a click while idle.
+    private property <color> ring-color: connected || busy ? tint : touch.has-hover ? Theme.accent : Theme.border-strong;
+    private property <length> size: 128px;
+    // 0..1 breathing value; only ticks while busy so an idle window doesn't keep redrawing.
+    private property <float> wave: busy ? (1 + sin(animation-tick() / 1.4s * 360deg)) / 2 : 0;
+
+    VerticalLayout {
+        alignment: center;
+        padding: 24px;
+        spacing: 14px;
+
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: root.size + 48px;
+                height: root.size + 48px;
+
+                // Soft static glow behind the button, in the state's color.
+                Rectangle {
+                    width: root.size * 2.2;
+                    height: self.width;
+                    background: @radial-gradient(circle, root.tint.transparentize(root.connected ? 84% : root.busy ? 88% : 95%) 0%, transparent 70%);
+                }
+
+                // Halo: breathes while busy, steady glow when connected.
+                Rectangle {
+                    width: root.size * (1.08 + 0.14 * root.wave);
+                    height: self.width;
+                    border-radius: self.width / 2;
+                    background: root.tint.transparentize(root.busy ? 0.75 + 0.15 * root.wave : root.connected ? 0.82 : 1);
+                    animate background { duration: 250ms; }
+                }
+
+                // Spinning quarter arc while connecting / disconnecting. The endpoints are computed
+                // from the clock (rather than rotating the element) so it works on every renderer.
+                if root.busy: Path {
+                    property <angle> start: animation-tick() / 0.9s * 360deg;
+                    width: root.size + 30px;
+                    height: root.size + 30px;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    commands: "M " + (50 + 48 * cos(self.start)) + " " + (50 + 48 * sin(self.start))
+                        + " A 48 48 0 0 1 " + (50 + 48 * cos(self.start + 90deg)) + " " + (50 + 48 * sin(self.start + 90deg));
+                    stroke: root.tint;
+                    stroke-width: 3px;
+                }
+
+                ring := Rectangle {
+                    width: root.size;
+                    height: root.size;
+                    border-radius: self.width / 2;
+                    border-width: 2px;
+                    border-color: root.ring-color;
+                    animate border-color { duration: 250ms; }
+
+                    Rectangle {
+                        width: touch.pressed ? root.size * 0.72 : root.size * 0.84;
+                        height: self.width;
+                        border-radius: self.width / 2;
+                        // Lit when connected, a dark raised disc otherwise. Solid colors: the software
+                        // renderer draws gradients without the rounded corners.
+                        background: root.connected ? Theme.connected : touch.has-hover ? Theme.surface-hover : Theme.surface-raised;
+                        animate background { duration: 250ms; }
+                        border-width: root.connected ? 0px : 1px;
+                        border-color: Theme.border-strong;
+                        animate width { duration: 80ms; easing: ease-in-out; }
+
+                        Image {
+                            source: @image-url("../../assets/icons/MdiPowerStandby.svg");
+                            width: parent.width / 2.2;
+                            height: self.width;
+                            colorize: root.connected ? Theme.on-accent
+                                : root.busy ? Theme.connecting
+                                : touch.has-hover ? Theme.accent : Theme.text-muted;
+                        }
+                    }
+
+                    touch := TouchArea {
+                        // Connecting can be cancelled; disconnecting can't.
+                        enabled: root.state != ConnectionState.disconnecting && !AppState.cancelling;
+                        mouse-cursor: self.enabled ? pointer : default;
+                        clicked => { AppState.toggle-connection(); }
+                    }
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+
+            Text {
+                text: AppState.cancelling ? "Cancelling…"
+                    : root.state == ConnectionState.connecting ? "Connecting…"
+                    : root.state == ConnectionState.disconnecting ? "Disconnecting…"
+                    : root.connected ? "Connected" : "Disconnected";
+                font-size: 24px;
+                font-weight: 800;
+                horizontal-alignment: center;
+                color: root.connected ? Theme.connected : root.busy ? Theme.connecting : Theme.text;
+            }
+
+            Text {
+                text: root.connected && AppState.proxy-address != "" ? "Proxy on " + AppState.proxy-address + " · " + AppState.uptime
+                    : root.connected ? AppState.uptime
+                    : root.state == ConnectionState.connecting && !AppState.cancelling ? "Tap again to cancel"
+                    : "";
+                font-size: 12px;
+                horizontal-alignment: center;
+                color: Theme.text-muted;
+            }
+        }
+
+        // How traffic reaches the VPN. Switching while connected reconnects.
+        TabBar {
+            height: 32px;
+            font-size: 12px;
+            tabs: ["Tunnel", "System proxy", "Proxy only"];
+            current <=> AppState.mode;
+            enabled: !root.busy;
+            changed => { AppState.mode-changed(); }
+        }
+
+        // The selected config; clicking it jumps to the list.
+        Rectangle {
+            height: 54px;
+            border-radius: 12px;
+            background: card-touch.has-hover ? Theme.surface-raised : Theme.surface;
+            border-width: 1px;
+            border-color: card-touch.has-hover ? Theme.border-strong : Theme.border;
+
+            card-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { AppState.current-tab = 1; }
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+
+                if AppState.selected-id >= 0: VerticalLayout {
+                    alignment: center;
+                    ProtocolBadge { protocol: AppState.selected-protocol; }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+
+                    Text {
+                        text: AppState.selected-id >= 0 ? AppState.selected-name : "No config selected";
+                        font-size: 13px;
+                        font-weight: 600;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: AppState.selected-id >= 0 ? AppState.selected-source : "Pick one in the Configs tab";
+                        font-size: 11px;
+                        color: Theme.text-muted;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        if AppState.error != "": Text {
+            text: AppState.error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}

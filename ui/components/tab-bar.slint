@@ -1,0 +1,49 @@
+import { Theme } from "../theme.slint";
+
+export component TabBar inherits Rectangle {
+    in property <[string]> tabs;
+    in-out property <int> current;
+    in property <bool> enabled: true;
+    in property <length> font-size: 13px;
+
+    // Only for clicks, not for changes made from code.
+    callback changed(int);
+
+    height: 36px;
+    border-radius: 10px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+    opacity: root.enabled ? 1 : 0.5;
+
+    HorizontalLayout {
+        padding: 3px;
+        spacing: 3px;
+
+        for tab[i] in root.tabs: Rectangle {
+            border-radius: 8px;
+            background: i == root.current ? Theme.surface-hover : touch.has-hover ? Theme.surface-raised : transparent;
+            border-width: i == root.current ? 1px : 0px;
+            border-color: Theme.border-strong;
+            animate background { duration: 120ms; }
+
+            Text {
+                text: tab;
+                font-size: root.font-size;
+                font-weight: i == root.current ? 600 : 400;
+                color: i == root.current ? Theme.text : Theme.text-muted;
+            }
+
+            touch := TouchArea {
+                enabled: root.enabled;
+                mouse-cursor: root.enabled ? pointer : default;
+                clicked => {
+                    if i != root.current {
+                        root.current = i;
+                        root.changed(i);
+                    }
+                }
+            }
+        }
+    }
+}

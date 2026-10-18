@@ -1,0 +1,97 @@
+import { Theme } from "../theme.slint";
+import { ConfigData } from "../state.slint";
+import { IconButton, ProtocolBadge } from "buttons.slint";
+
+export component ConfigItem inherits Rectangle {
+    in property <ConfigData> data;
+    in property <bool> selected;
+    in property <bool> show-source;
+
+    callback clicked();
+    callback remove();
+
+    private property <color> latency-color: data.latency-level == 1 ? Theme.connected
+        : data.latency-level == 2 ? Theme.connecting
+        : data.latency-level == 3 || data.latency-level == 5 ? Theme.danger
+        : Theme.text-muted;
+
+    height: 46px;
+    border-radius: 10px;
+    background: root.selected ? Theme.selected : touch.has-hover ? Theme.surface-raised : Theme.surface;
+    border-width: 1px;
+    border-color: root.selected ? Theme.accent.transparentize(45%) : touch.has-hover ? Theme.border-strong : Theme.border;
+    animate background, border-color { duration: 100ms; }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        // Radio dot
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                border-width: 2px;
+                border-color: root.selected ? Theme.accent : Theme.text-faint;
+
+                if root.selected: Rectangle {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: Theme.accent;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            ProtocolBadge { protocol: data.protocol; }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 1px;
+
+            Text {
+                text: data.name;
+                font-size: 13px;
+                font-weight: root.selected ? 600 : 400;
+                overflow: elide;
+            }
+
+            if root.show-source: Text {
+                text: data.source;
+                font-size: 10px;
+                color: Theme.text-faint;
+                overflow: elide;
+            }
+        }
+
+        Text {
+            text: data.latency;
+            font-size: 11px;
+            font-weight: 600;
+            vertical-alignment: center;
+            color: root.latency-color;
+        }
+
+        if data.removable: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: @image-url("../../assets/icons/MdiDelete.svg");
+                size: 14px;
+                hover-color: Theme.danger;
+                clicked => { root.remove(); }
+            }
+        }
+    }
+}

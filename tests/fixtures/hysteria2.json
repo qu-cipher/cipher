@@ -1,0 +1,28 @@
+{
+  "dns": {
+    "servers": [
+      { "type": "tls", "tag": "dot", "server": "dns.google", "server_port": 853, "detour": "proxy", "domain_resolver": "local" },
+      { "type": "local", "tag": "local" }
+    ]
+  },
+  "inbounds": [
+    { "type": "tun", "address": ["172.18.0.1/30"], "auto_route": true, "dns_mode": "hijack" }
+  ],
+  "outbounds": [
+    {
+      "type": "hysteria2",
+      "tag": "proxy",
+      "server": "hy.example.com",
+      "server_port": 443,
+      "server_ports": ["20000:30000"],
+      "hop_interval": "30s",
+      "up_mbps": 50,
+      "down_mbps": 200,
+      "password": "goofy_ahh_password",
+      "obfs": { "type": "salamander", "password": "cry_me_a_r1ver" },
+      "tls": { "enabled": true, "server_name": "hy.example.com", "alpn": ["h3"] }
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": { "final": "proxy", "auto_detect_interface": true, "default_domain_resolver": "local" }
+}

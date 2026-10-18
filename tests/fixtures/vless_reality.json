@@ -1,0 +1,106 @@
+{
+  "$schema": "https://sing-box.sagernet.org/schema.json",
+  "log": { "level": "warn", "timestamp": true },
+  "dns": {
+    "servers": [
+      { "type": "https", "tag": "remote", "server": "1.1.1.1", "path": "/dns-query", "detour": "proxy" },
+      { "type": "udp", "tag": "local", "server": "8.8.8.8", "server_port": 53 },
+      { "type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15" }
+    ],
+    "rules": [
+      { "query_type": ["A", "AAAA"], "server": "fakeip" },
+      { "domain_suffix": [".ir"], "action": "route", "server": "local" }
+    ],
+    "final": "remote",
+    "strategy": "prefer_ipv4"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "address": ["172.18.0.1/30", "fdfe:dcba:9876::1/126"],
+      "mtu": 9000,
+      "auto_route": true,
+      "strict_route": true,
+      "route_exclude_address": ["192.168.0.0/16"]
+    },
+    { "type": "mixed", "tag": "mixed-in", "listen": "127.0.0.1", "listen_port": 2080 }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy",
+      "server": "de.example.com",
+      "server_port": 443,
+      "uuid": "bf000d23-0752-40b4-affe-68f7707a9661",
+      "flow": "xtls-rprx-vision",
+      "network": "tcp",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.microsoft.com",
+        "utls": { "enabled": true, "fingerprint": "chrome" },
+        "reality": { "enabled": true, "public_key": "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0", "short_id": "0123456789abcdef" }
+      }
+    },
+    {
+      "type": "vmess",
+      "tag": "vmess-ws",
+      "server": "us.example.com",
+      "server_port": 443,
+      "uuid": "bf000d23-0752-40b4-affe-68f7707a9661",
+      "security": "auto",
+      "tls": { "enabled": true, "server_name": "us.example.com", "fragment": true },
+      "transport": { "type": "ws", "path": "/ray", "headers": { "Host": "us.example.com" } }
+    },
+    {
+      "type": "trojan",
+      "tag": "trojan-grpc",
+      "server": "nl.example.com",
+      "server_port": 443,
+      "password": "secret",
+      "tls": { "enabled": true },
+      "transport": { "type": "grpc", "service_name": "TunService" }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "ss",
+      "server": "1.2.3.4",
+      "server_port": 8388,
+      "method": "2022-blake3-aes-128-gcm",
+      "password": "8JCsPssfgS8tiRwiMlhARg==",
+      "multiplex": { "enabled": true, "protocol": "h2mux" }
+    },
+    {
+      "type": "urltest",
+      "tag": "auto",
+      "outbounds": ["proxy", "vmess-ws", "trojan-grpc"],
+      "interval": "3m"
+    },
+    { "type": "selector", "tag": "select", "outbounds": ["auto", "proxy"], "default": "auto" },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": {
+    "rules": [
+      { "action": "sniff" },
+      { "protocol": ["dns"], "action": "hijack-dns" },
+      { "ip_is_private": true, "outbound": "direct" },
+      { "rule_set": ["geosite-ads"], "action": "reject" }
+    ],
+    "rule_set": [
+      {
+        "type": "remote",
+        "tag": "geosite-ads",
+        "format": "binary",
+        "url": "https://example.com/geosite-ads.srs",
+        "download_detour": "proxy"
+      }
+    ],
+    "final": "select",
+    "auto_detect_interface": true,
+    "default_domain_resolver": { "server": "local", "strategy": "ipv4_only" }
+  },
+  "experimental": {
+    "cache_file": { "enabled": true, "path": "cache.db", "store_fakeip": true },
+    "clash_api": { "external_controller": "127.0.0.1:9090", "secret": "s3cret" }
+  }
+}

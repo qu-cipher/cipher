@@ -1,0 +1,117 @@
+// Everything Rust reads and writes. Rust owns the data; the UI only calls callbacks.
+
+export enum ConnectionState { disconnected, connecting, connected, disconnecting }
+
+export struct SubscriptionData {
+    id: int,
+    name: string,
+    count: int,
+    // "3.2 GB / 50 GB", "3.2 GB used" or "No usage info"
+    usage: string,
+    // used / total, or -1 when there is nothing to draw
+    progress: float,
+    expire: string,
+    updated: string,
+    updating: bool,
+}
+
+export struct ConfigData {
+    id: int,
+    name: string,
+    protocol: string,
+    source: string,
+    latency: string,
+    // 0 untested, 1 good, 2 ok, 3 slow, 4 testing, 5 failed
+    latency-level: int,
+    removable: bool,
+}
+
+export global AppState {
+    // ── Connection ──
+    in property <ConnectionState> connection: ConnectionState.disconnected;
+    in property <bool> cancelling;
+    in property <string> uptime;
+    in property <string> error;
+    // 0 Tunnel, 1 System proxy, 2 Proxy only
+    in-out property <int> mode;
+    // "127.0.0.1:2080" while connected with the local proxy running, else empty
+    in property <string> proxy-address;
+
+    // ── Selection ──
+    in property <int> selected-id: -1;
+    in property <string> selected-name;
+    in property <string> selected-protocol;
+    in property <string> selected-source;
+
+    // ── Lists ──
+    in property <[SubscriptionData]> subscriptions;
+    in property <[ConfigData]> configs;
+    in property <int> config-total;
+    in property <[string]> filters: ["All"];
+    in-out property <int> filter-index;
+    in property <bool> testing;
+
+    // ── Navigation (UI only) ──
+    in-out property <int> current-tab: 1;
+
+    // ── Dialogs: the UI opens them, Rust closes them on success ──
+    in-out property <bool> sub-dialog-open;
+    in property <bool> sub-dialog-busy;
+    in-out property <string> sub-dialog-url;
+    in-out property <string> sub-dialog-error;
+
+    in-out property <bool> links-dialog-open;
+    in-out property <string> links-dialog-text;
+    in-out property <string> links-dialog-error;
+
+    // OpenVPN sign-in: Rust opens it when a config needs a username and password.
+    in-out property <bool> creds-dialog-open;
+    in property <string> creds-dialog-title;
+    in property <string> creds-dialog-error;
+    // "Connect" when submitting also connects, else "Save"
+    in property <string> creds-dialog-action: "Save";
+    in-out property <string> creds-username;
+    in-out property <string> creds-password;
+
+    // ── Toast ──
+    in property <string> notice;
+    in property <bool> notice-is-error;
+
+    // ── Settings ──
+    out property <[string]> log-levels: ["debug", "info", "warn", "error"];
+    in-out property <int> log-level: 1;
+    in-out property <string> dns-remote;
+    in-out property <string> dns-direct;
+    in-out property <bool> bypass-lan: true;
+    in-out property <string> proxy-port: "2080";
+    in-out property <bool> tunnel-proxy;
+    in property <string> data-dir;
+
+    // ── Engines ──
+    in property <string> singbox-status;
+    in property <bool> singbox-installed;
+    in property <string> openvpn-status;
+    // downloading sing-box
+    in property <bool> engine-busy;
+
+    callback toggle-connection();
+    callback mode-changed();
+    callback select-config(int);
+    callback remove-config(int);
+    callback filter-changed(int);
+    callback test-latency();
+    callback add-links(string);
+    callback submit-credentials();
+    callback import-files();
+
+    callback add-subscription(string);
+    callback update-subscription(int);
+    callback update-all-subscriptions();
+    callback remove-subscription(int);
+    // index into `subscriptions`: filter the config list to it
+    callback show-subscription(int);
+
+    callback settings-changed();
+    callback install-singbox();
+    callback open-data-dir();
+}

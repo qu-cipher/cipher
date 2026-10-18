@@ -1,0 +1,22 @@
+import { AppState } from "../state.slint";
+import { TabBar } from "../components/tab-bar.slint";
+import { SubscriptionsPanel } from "subscriptions-panel.slint";
+import { ConfigsPanel } from "configs-panel.slint";
+import { SettingsPanel } from "settings-panel.slint";
+
+// The right-hand side: subscriptions, configs and settings tabs.
+export component LibraryPanel inherits Rectangle {
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        TabBar {
+            tabs: ["Subscriptions", "Configs", "Settings"];
+            current <=> AppState.current-tab;
+        }
+
+        if AppState.current-tab == 0: SubscriptionsPanel { vertical-stretch: 1; }
+        if AppState.current-tab == 1: ConfigsPanel { vertical-stretch: 1; }
+        if AppState.current-tab == 2: SettingsPanel { vertical-stretch: 1; }
+    }
+}

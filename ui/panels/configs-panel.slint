@@ -1,0 +1,70 @@
+import { ListView, ComboBox } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { PillButton } from "../components/buttons.slint";
+import { ConfigItem } from "../components/config-item.slint";
+
+export component ConfigsPanel inherits VerticalLayout {
+    spacing: 8px;
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        ComboBox {
+            horizontal-stretch: 1;
+            model: AppState.filters;
+            current-index <=> AppState.filter-index;
+            selected => { AppState.filter-changed(self.current-index); }
+        }
+
+        PillButton {
+            text: "Add";
+            icon: @image-url("../../assets/icons/MdiPlus.svg");
+            primary: true;
+            clicked => {
+                AppState.links-dialog-error = "";
+                AppState.links-dialog-open = true;
+            }
+        }
+
+        PillButton {
+            text: "Import";
+            icon: @image-url("../../assets/icons/MdiFileImport.svg");
+            clicked => { AppState.import-files(); }
+        }
+
+        PillButton {
+            text: AppState.testing ? "Testing…" : "Test";
+            icon: @image-url("../../assets/icons/MdiFlash.svg");
+            enabled: !AppState.testing && AppState.configs.length > 0;
+            clicked => { AppState.test-latency(); }
+        }
+    }
+
+    if AppState.configs.length == 0: Text {
+        vertical-stretch: 1;
+        text: AppState.config-total == 0
+            ? "No configs yet.\nAdd share links, import a WireGuard / OpenVPN file,\nor add a subscription."
+            : "Nothing in this list.";
+        font-size: 13px;
+        color: Theme.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    if AppState.configs.length > 0: ListView {
+        vertical-stretch: 1;
+
+        for config in AppState.configs: VerticalLayout {
+            padding-bottom: 5px;
+
+            ConfigItem {
+                data: config;
+                selected: config.id == AppState.selected-id;
+                show-source: AppState.filter-index == 0;
+                clicked => { AppState.select-config(config.id); }
+                remove => { AppState.remove-config(config.id); }
+            }
+        }
+    }
+}

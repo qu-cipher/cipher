@@ -1,0 +1,29 @@
+{
+  "inbounds": [
+    { "type": "tun", "address": ["172.18.0.1/30"], "auto_route": true, "strict_route": true }
+  ],
+  "outbounds": [
+    { "type": "direct", "tag": "direct" }
+  ],
+  "endpoints": [
+    {
+      "type": "wireguard",
+      "tag": "proxy",
+      "mtu": 1408,
+      "address": ["10.0.0.2/32", "fd00::2/128"],
+      "private_key": "eCtXsJZ27+4PbhDkHnB923tkUn2Gj59wZw5wFA75MnU=",
+      "peers": [
+        {
+          "address": "203.0.113.1",
+          "port": 51820,
+          "public_key": "Cr8hWlKvtDt7nrvf+f0brNQQzabAqrjfBvas9pmowjo=",
+          "pre_shared_key": "31aIhAPwktDGpH4JDhA8GNvjFXEf/a6+UaQRyOAiyfM=",
+          "allowed_ips": ["0.0.0.0/0", "::/0"],
+          "persistent_keepalive_interval": 25,
+          "reserved": [0, 0, 0]
+        }
+      ]
+    }
+  ],
+  "route": { "final": "proxy", "auto_detect_interface": true }
+}

@@ -1,0 +1,182 @@
+import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState, ConnectionState } from "../state.slint";
+import { PillButton, Toggle } from "../components/buttons.slint";
+
+component Section inherits VerticalLayout {
+    in property <string> title;
+    spacing: 6px;
+
+    Text {
+        text: root.title;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.8px;
+        color: Theme.text-faint;
+    }
+
+    Rectangle {
+        border-radius: 12px;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        VerticalLayout {
+            padding: 12px;
+            spacing: 10px;
+            @children
+        }
+    }
+}
+
+component Row inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> hint;
+    spacing: 10px;
+
+    VerticalLayout {
+        horizontal-stretch: 1;
+        alignment: center;
+
+        Text {
+            text: root.label;
+            font-size: 13px;
+        }
+
+        if root.hint != "": Text {
+            text: root.hint;
+            font-size: 10px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+    }
+
+    @children
+}
+
+export component SettingsPanel inherits ScrollView {
+    VerticalLayout {
+        spacing: 14px;
+        padding-right: 8px;
+
+        Section {
+            title: "ENGINES";
+
+            Row {
+                label: "sing-box";
+                hint: AppState.singbox-status;
+
+                if !AppState.singbox-installed: VerticalLayout {
+                    alignment: center;
+                    PillButton {
+                        text: AppState.engine-busy ? "Downloading…" : "Download";
+                        primary: true;
+                        // Files of a running engine can't be replaced.
+                        enabled: !AppState.engine-busy && AppState.connection == ConnectionState.disconnected;
+                        clicked => { AppState.install-singbox(); }
+                    }
+                }
+            }
+
+            Row {
+                label: "OpenVPN";
+                hint: AppState.openvpn-status;
+            }
+        }
+
+        Section {
+            title: "ROUTING";
+
+            Row {
+                label: "Bypass LAN";
+                hint: "Local network and private addresses skip the tunnel.";
+                Toggle {
+                    checked <=> AppState.bypass-lan;
+                    toggled => { AppState.settings-changed(); }
+                }
+            }
+
+        }
+
+        Section {
+            title: "PROXY";
+
+            Row {
+                label: "Proxy port";
+                hint: "SOCKS5 / HTTP on 127.0.0.1, used by System proxy and Proxy only.";
+                LineEdit {
+                    width: 80px;
+                    input-type: number;
+                    placeholder-text: "2080";
+                    text <=> AppState.proxy-port;
+                    edited => { AppState.settings-changed(); }
+                }
+            }
+
+            Row {
+                label: "Proxy in Tunnel mode";
+                hint: "Also serve the local proxy while tunneling.";
+                Toggle {
+                    checked <=> AppState.tunnel-proxy;
+                    toggled => { AppState.settings-changed(); }
+                }
+            }
+        }
+
+        Section {
+            title: "DNS";
+
+            Row {
+                label: "Remote";
+                hint: "DNS-over-HTTPS through the tunnel.";
+                LineEdit {
+                    width: 160px;
+                    placeholder-text: "1.1.1.1";
+                    text <=> AppState.dns-remote;
+                    edited => { AppState.settings-changed(); }
+                }
+            }
+
+            Row {
+                label: "Direct";
+                hint: "Plain DNS that resolves server addresses.";
+                LineEdit {
+                    width: 160px;
+                    placeholder-text: "8.8.8.8";
+                    text <=> AppState.dns-direct;
+                    edited => { AppState.settings-changed(); }
+                }
+            }
+        }
+
+        Section {
+            title: "LOGS";
+
+            Row {
+                label: "Log level";
+                ComboBox {
+                    width: 110px;
+                    model: AppState.log-levels;
+                    current-index <=> AppState.log-level;
+                    selected => { AppState.settings-changed(); }
+                }
+            }
+
+            Row {
+                label: "Data folder";
+                hint: AppState.data-dir;
+                PillButton {
+                    text: "Open";
+                    clicked => { AppState.open-data-dir(); }
+                }
+            }
+        }
+
+        Text {
+            text: "Changes apply the next time you connect.";
+            font-size: 11px;
+            color: Theme.text-muted;
+            horizontal-alignment: center;
+        }
+    }
+}
