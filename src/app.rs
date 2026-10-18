@@ -71,6 +71,8 @@ type Ctx = Arc<Shared>;
 
 pub fn run() -> Result<(), Box<dyn Error>> {
     let ui = AppWindow::new()?;
+    // Matches cipher_client.desktop, so the shell shows the launcher icon for this window.
+    slint::set_xdg_app_id("cipher_client")?;
     let (ctx, _monitor) = init(&ui);
 
     ui.run()?;

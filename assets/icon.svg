@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- App icon: shield with a keyhole, in the theme's navy + cyan (ui/theme.slint). -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#0e131b"/>
+  <rect x="8.5" y="8.5" width="239" height="239" rx="55.5" fill="none" stroke="#33405a" stroke-width="3"/>
+  <path d="M128 44 L196 70 V124 C196 168 167 199 128 214 C89 199 60 168 60 124 V70 Z" fill="#5cc8ff"/>
+  <path d="M128 66 L176 84 V124 C176 156 156 180 128 192 C100 180 80 156 80 124 V84 Z" fill="#151c27"/>
+  <circle cx="128" cy="118" r="18" fill="#5cc8ff"/>
+  <path d="M120 128 H136 L141 160 H115 Z" fill="#5cc8ff"/>
+</svg>
