@@ -55,6 +55,9 @@ component Row inherits HorizontalLayout {
 }
 
 export component SettingsPanel inherits ScrollView {
+    private property <string> github-url: "https://github.com/qu-cipher/cipher_vpn_client";
+    private property <string> telegram-url: "https://t.me/q1tumc";
+
     VerticalLayout {
         spacing: 14px;
         padding-right: 8px;
@@ -168,6 +171,38 @@ export component SettingsPanel inherits ScrollView {
                 PillButton {
                     text: "Open";
                     clicked => { AppState.open-data-dir(); }
+                }
+            }
+        }
+
+        Section {
+            title: "ABOUT";
+
+            Row {
+                label: "Version";
+                Text {
+                    vertical-alignment: center;
+                    text: AppState.app-version;
+                    font-size: 13px;
+                    color: Theme.text-muted;
+                }
+            }
+
+            Row {
+                label: "GitHub";
+                hint: root.github-url;
+                PillButton {
+                    text: "Open";
+                    clicked => { AppState.open-url(root.github-url); }
+                }
+            }
+
+            Row {
+                label: "Telegram channel";
+                hint: root.telegram-url;
+                PillButton {
+                    text: "Open";
+                    clicked => { AppState.open-url(root.telegram-url); }
                 }
             }
         }

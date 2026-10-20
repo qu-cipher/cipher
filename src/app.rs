@@ -183,8 +183,13 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
     on!(ui, ctx, on_settings_changed, |ui, ctx| settings_changed(&ui, ctx));
     on!(ui, ctx, on_install_singbox, |ui, ctx| install_singbox(&ui, ctx));
     on!(ui, ctx, on_open_data_dir, |ui, ctx| {
-        if let Err(e) = paths::data_dir().and_then(|dir| open_folder(&dir).map_err(Into::into)) {
+        if let Err(e) = paths::data_dir().and_then(|dir| open_external(&dir).map_err(Into::into)) {
             notify(&ui, ctx, format!("Couldn't open the data folder: {e}"), true);
+        }
+    });
+    on!(ui, ctx, on_open_url, |ui, ctx, url: SharedString| {
+        if let Err(e) = open_external(url.as_str()) {
+            notify(&ui, ctx, format!("Couldn't open {url}: {e}"), true);
         }
     });
 }
@@ -524,7 +529,6 @@ fn submit_credentials(ui: &AppWindow, ctx: &Ctx) {
 }
 
 // ───────────────────────────── Subscriptions ─────────────────────────────
-
 fn add_subscription(ui: &AppWindow, ctx: &Ctx, url: &str) {
     let state = ui.global::<AppState>();
     let url = url.trim().to_owned();
@@ -927,6 +931,7 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     if let Ok(dir) = paths::data_dir() {
         state.set_data_dir(dir.display().to_string().into());
     }
+    state.set_app_version(env!("CARGO_PKG_VERSION").into());
 }
 
 fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
@@ -1015,9 +1020,10 @@ fn version_at_least(version: &str, minimum: &str) -> bool {
 
 // ───────────────────────────── Helpers ─────────────────────────────
 
-fn open_folder(dir: &Path) -> std::io::Result<()> {
+/// Opens a folder or URL with the desktop's default handler.
+fn open_external(target: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
     let opener = if cfg!(windows) { "explorer" } else { "xdg-open" };
-    Command::new(opener).arg(dir).spawn().map(|_| ())
+    Command::new(opener).arg(target).spawn().map(|_| ())
 }
 
 fn format_bytes(bytes: u64) -> String {
