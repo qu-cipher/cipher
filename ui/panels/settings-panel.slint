@@ -87,7 +87,7 @@ export component SettingsPanel inherits ScrollView {
                 hint: AppState.openvpn-status;
             }
 
-            Row {
+            if AppState.psiphon-enabled: Row {
                 label: "Psiphon";
                 hint: AppState.psiphon-status;
 
@@ -194,7 +194,7 @@ export component SettingsPanel inherits ScrollView {
             }
         }
 
-        Section {
+        if AppState.psiphon-enabled: Section {
             title: "PSIPHON";
 
             Row {

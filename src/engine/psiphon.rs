@@ -16,6 +16,11 @@ use std::{ffi::OsStr, fs, net::TcpListener, path::{Path, PathBuf}};
 
 pub const BINARY: &str = "psiphon-tunnel-core";
 
+/// Psiphon is hidden until there's a network config to ship: Psiphon doesn't publish one for its
+/// public servers, integrators request it from the Psiphon team (possibly under a contract).
+/// While false there's no Psiphon Tunnel entry, engine row or Psiphon settings.
+pub const ENABLED: bool = false;
+
 /// Exit countries Psiphon offers: (ISO code, name). Empty code = fastest server anywhere.
 pub const REGIONS: [(&str, &str); 29] = [
     ("", "Fastest"),

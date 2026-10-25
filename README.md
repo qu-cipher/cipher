@@ -9,7 +9,7 @@ for an existing engine, and runs that engine as a child process:
   Hysteria2, TUIC, AnyTLS) and WireGuard
 - **OpenVPN** for `.ovpn` files and `ovpn://` links
 - **[Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core)** (its ConsoleClient) for the built-in
-  *Psiphon Tunnel* entry, chained behind sing-box
+  *Psiphon Tunnel* entry, chained behind sing-box. **Temporarily disabled** (see below)
 
 > **Status:** a personal project, early but usable. Tested on Linux (CachyOS) with real servers in
 > Tunnel and proxy modes. The Windows build has never been compiled or run. OpenVPN has only been
@@ -30,7 +30,8 @@ for an existing engine, and runs that engine as a child process:
   | Proxy only | Local SOCKS5/HTTP proxy on `127.0.0.1:2080`; apps opt in | No |
 
   OpenVPN works in Tunnel mode only.
-- **Psiphon Tunnel:** a built-in entry in the Configs list. Psiphon finds its own servers. Import a Psiphon
+- **Psiphon Tunnel** (*temporarily disabled*: Psiphon doesn't publish a config for its public network, it's
+  requested from the Psiphon team. The code stays, and `psiphon::ENABLED` turns it back on): a built-in entry in the Configs list. Psiphon finds its own servers. Import a Psiphon
   client config (the network part: `PropagationChannelId`, `SponsorId`, server list URLs and keys) in
   *Settings → Psiphon* and pick an exit country there. sing-box runs in front of it, so all three modes and
   the routing rules work. Psiphon's proxy only forwards TCP, so UDP apps fall back to TCP.

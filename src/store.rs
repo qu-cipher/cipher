@@ -169,7 +169,8 @@ impl Store {
 
     /// Every config with the subscription it belongs to (`None` = built-in or manual).
     pub fn all_entries(&self) -> impl Iterator<Item = (Option<&StoredSubscription>, &Entry)> {
-        let manual = BUILTIN.iter().chain(&self.manual).map(|e| (None, e));
+        let builtin = BUILTIN.iter().filter(|_| crate::engine::psiphon::ENABLED);
+        let manual = builtin.chain(&self.manual).map(|e| (None, e));
         let subscribed = self
             .subscriptions
             .iter()
@@ -244,6 +245,10 @@ mod tests {
     #[test]
     fn psiphon_is_built_in() {
         let mut store = Store::default();
+        if !crate::engine::psiphon::ENABLED {
+            assert!(store.entry(PSIPHON_ID).is_none());
+            return;
+        }
         let (source, entry) = store.all_entries().next().unwrap();
         assert!(source.is_none() && entry.id == PSIPHON_ID && is_builtin(entry.id));
         assert_eq!(entry.profile.protocol(), "psiphon");

@@ -523,7 +523,7 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
         let mut errors = Vec::new();
         let mut psiphon_network = None;
         for file in &files {
-            if let Ok(text) = std::fs::read_to_string(file) && psiphon::looks_like_network(&text) {
+            if psiphon::ENABLED && let Ok(text) = std::fs::read_to_string(file) && psiphon::looks_like_network(&text) {
                 psiphon_network = Some(psiphon::parse_network(&text));
                 continue;
             }
@@ -1043,6 +1043,7 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_psiphon_regions(ModelRc::new(VecModel::from(regions)));
     state.set_psiphon_region(psiphon::REGIONS.iter().position(|(code, _)| *code == settings.psiphon.region).unwrap_or(0) as i32);
     state.set_psiphon_network(psiphon_network_status(&settings.psiphon).into());
+    state.set_psiphon_enabled(psiphon::ENABLED);
     if let Ok(dir) = paths::data_dir() {
         state.set_data_dir(dir.display().to_string().into());
     }
@@ -1188,7 +1189,7 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
     thread::spawn(move || {
         let singbox = install::installed("sing-box");
         let openvpn = install::installed("openvpn");
-        let psiphon = install::installed(psiphon::BINARY);
+        let psiphon = psiphon::ENABLED.then(|| install::installed(psiphon::BINARY)).flatten();
 
         let usable = singbox.as_ref().is_some_and(|info| version_at_least(&info.version, singbox::MIN_VERSION));
         let singbox_status = match &singbox {

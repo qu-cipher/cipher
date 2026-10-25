@@ -276,6 +276,8 @@ A new fixture must survive deserialize → serialize unchanged. Only use modeled
 
 ## 10. Psiphon chaining (`src/engine/psiphon.rs`)
 
+> **Disabled** (`psiphon::ENABLED = false`) until there's a network config to ship. Psiphon doesn't publish one for its public network; integrators request it from the Psiphon team, possibly under a contract. Everything below still holds once it's switched back on.
+
 The built-in *Psiphon Tunnel* entry (`Profile::Psiphon`, store id `PSIPHON_ID = 0`, never saved) runs two processes:
 
 1. **`psiphon-tunnel-core -config <data>/psiphon.json -dataRootDirectory <data>/psiphon`**, as the user.

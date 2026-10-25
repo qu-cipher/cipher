@@ -247,13 +247,14 @@ fn routing_screenshots() {
     assert_eq!(state.get_rules().row_count(), 3);
     assert_eq!(state.get_rules().row_data(0).unwrap().kind, "IP");
 
-    // The Psiphon settings and the built-in entry in the Configs tab.
+    // The Psiphon settings and the built-in entry in the Configs tab (hidden while Psiphon is off).
     d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: -700.0 });
     d.shot("r09-psiphon-settings");
     d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: 1000.0 });
     state.set_current_tab(1);
     d.shot("r10-configs-psiphon");
     state.invoke_select_config(0);
+    assert_eq!(state.get_selected_id() == 0, crate::engine::psiphon::ENABLED);
     d.shot("r11-psiphon-selected");
 
     // Grouped by protocol, then one group folded, then ungrouped.

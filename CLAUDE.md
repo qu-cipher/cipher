@@ -4,7 +4,8 @@ Desktop VPN client (Linux + Windows) written in Rust with a **Slint** UI. It doe
 protocols itself: it imports configs, then drives external engines as child processes:
 - **sing-box** (≥ 1.12, pinned/tested 1.14.3) for proxy protocols and WireGuard
 - **openvpn** binary for `.ovpn` files (Tunnel mode only)
-- **psiphon-tunnel-core** (Psiphon ConsoleClient) for the built-in "Psiphon Tunnel" entry, chained behind sing-box
+- **psiphon-tunnel-core** (Psiphon ConsoleClient) for the built-in "Psiphon Tunnel" entry, chained behind sing-box.
+  **Disabled** via `engine::psiphon::ENABLED = false` (hides the entry, engine row and settings; code kept)
 
 Crate name `cipher_client`, edition 2024 (let-chains are used). README.md is the public overview: keep its
 feature list, "Not supported" list and layout table in sync when those change.
@@ -20,7 +21,7 @@ CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture   
 ```
 **Releases:** `.github/workflows/release.yml`, on a `v*` tag (must equal the Cargo.toml version) or manual run.
 It runs `cargo test --locked` and then a release build on ubuntu-22.04 + windows-latest (MSVC), and publishes a Release with
-tar.gz/zip + .sha256. There's no per-push CI (the user tests locally). The first Windows build ever happens there.
+tar.gz/zip + .sha256. There's no per-push CI (the user tests locally). It's the only place Windows gets built.
 **Screenshot test safety:** it connects a dummy server in Tunnel mode. The user's `/usr/bin/sing-box` has
 setcap and their own VPN is often up on tun0, so first `cp /usr/bin/sing-box target/debug/deps/` (a copy
 has no caps; found first because it's beside the test exe), and remove it afterwards. Convert frames with
@@ -111,27 +112,28 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Linux tunnel privileges: one pkexec password dialog per Tunnel connect; the engine runs as root (no setcap,
   no polkit rule; the old Grant button was removed 2026-10-18). Windows: whole app runs elevated.
 - Never connect to real VPN servers when testing; the user verifies connections. Test locally (unit tests, `sing-box check`).
-- Git repo since 2026-10-18 (branch `master`, no remote). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
+- Git repo since 2026-10-18 (branch `master`, remote `origin` = github.com/qu-cipher/cipher; v0.2.0 released 2026-10-26). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
 ## Status & history (as of 2026-10-26)
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 68 tests passing at last count (Psiphon + config grouping added 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 69 tests passing at last count (sing-box version parsing fix 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
-- Psiphon (2026-10-26): unit tests + `sing-box check` of the chained config pass; the downloaded binary was never run
-  here (sandbox refused executing it), so `-version` parsing ("Revision:" line) and the whole connect are unverified.
-  No network config ships: the user imports one (Settings → Psiphon, or Configs → Import of a .json/.config with
-  PropagationChannelId). User plans to ask Psiphon Inc. for their own IDs.
+- Psiphon (2026-10-26): DISABLED (`psiphon::ENABLED = false`). Researched: Psiphon publishes no public-network config;
+  integrators request one from the Psiphon team (Outline SDK docs: "Contact the Psiphon team… This may require a
+  contract"). The README "Generate configuration data" flow is only for self-hosted psiphond; the user wants public
+  servers. A self-hosted variant was built and reverted (backup was in a session scratchpad, not kept). Turn it back
+  on once the user has a config; then the binary and connect are still unverified (sandbox refused running it).
 - Split tunneling / routing rules (2026-10-25): generator + `sing-box check` pass, UI rendered headlessly. User must verify
   real routing: app rules in Tunnel mode (process lookup as root), geo presets (rule-set download via proxy), whitelist default.
 - pkexec-per-connect (2026-10-18): user must confirm exactly 1 prompt per Tunnel connect, clean disconnect, OpenVPN tun0 creation.
   First OpenVPN test (ovpn:// link) got through TLS + PUSH_REPLY, then failed creating tun0 unprivileged; that's what this fixes.
 - OpenVPN pushed DNS: now root, so OpenVPN 2.7's own DNS handling may apply it; unverified.
-- Windows build never compiled: `cargo check --target x86_64-pc-windows-gnu` fails in `ring` without MinGW
-  (`sudo pacman -S mingw-w64-gcc`, user's call). Target is already added via rustup.
+- Windows: builds and passes `cargo test` in CI (v0.2.0 release, MSVC), but has never been run on a real Windows machine.
+  Local cross-check (`--target x86_64-pc-windows-gnu`) still fails in `ring` without MinGW.
 
 Known unsupported (rejected on import with a clear reason): Xray-only XHTTP/SplitHTTP, mKCP, VLESS
 `encryption` (XHTTP is common for the user, so this matters), AmneziaWG, ShadowTLS links, Clash YAML subscriptions.

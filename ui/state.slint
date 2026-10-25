@@ -135,6 +135,8 @@ export global AppState {
     in property <string> openvpn-status;
     // downloading sing-box
     in property <bool> engine-busy;
+    // Psiphon is switched off in Rust (`psiphon::ENABLED`): hides its engine row and settings.
+    in property <bool> psiphon-enabled;
     in property <string> psiphon-status;
     in property <bool> psiphon-installed;
     // downloading Psiphon
