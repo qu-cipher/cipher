@@ -97,6 +97,24 @@ CIPHER_SCREENSHOTS=/tmp/shots cargo test routing_screenshots -- --ignored
 
 No test connects to a VPN server.
 
+## Releases
+
+GitHub Actions builds the binaries (`.github/workflows/release.yml`). To publish a release:
+
+```sh
+# bump `version` in Cargo.toml first, and commit it
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The workflow runs `cargo test` and a release build on Linux (Ubuntu 22.04, x86_64) and Windows (x86_64).
+It then publishes a GitHub Release with `cipher_client-linux-x86_64.tar.gz`, `cipher_client-windows-x86_64.zip`
+and their SHA-256 files. If one OS fails its tests, the release goes out without that OS's binary. It
+refuses a tag that doesn't match the Cargo.toml version.
+
+To try a build without releasing: *Actions → Release → Run workflow*. The archives are kept as workflow
+artifacts. Engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app downloads or finds them.
+
 ## How it works
 
 ```

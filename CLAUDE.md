@@ -18,6 +18,9 @@ cargo test                    # unit tests, fixture round-trips, generator asser
 cargo test -- --ignored       # also real `sing-box check`, real release download, screenshots
 CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture   # headless UI frames (*.rgba 820x520)
 ```
+**Releases:** `.github/workflows/release.yml`, on a `v*` tag (must equal the Cargo.toml version) or manual run.
+It runs `cargo test --locked` and then a release build on ubuntu-22.04 + windows-latest (MSVC), and publishes a Release with
+tar.gz/zip + .sha256. There's no per-push CI (the user tests locally). The first Windows build ever happens there.
 **Screenshot test safety:** it connects a dummy server in Tunnel mode. The user's `/usr/bin/sing-box` has
 setcap and their own VPN is often up on tun0, so first `cp /usr/bin/sing-box target/debug/deps/` (a copy
 has no caps; found first because it's beside the test exe), and remove it afterwards. Convert frames with
