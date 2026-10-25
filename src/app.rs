@@ -429,7 +429,8 @@ fn latency_display(latency: Option<Latency>) -> (String, i32) {
 fn select_config(ui: &AppWindow, ctx: &Ctx, id: u64) {
     {
         let mut store = ctx.store.lock().unwrap();
-        if store.selected == Some(id) {
+        // Also ignores group headings (id -1).
+        if store.selected == Some(id) || store.entry(id).is_none() {
             return;
         }
         store.selected = Some(id);

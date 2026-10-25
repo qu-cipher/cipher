@@ -51,20 +51,24 @@ pub fn installed(name: &str) -> Option<EngineInfo> {
     command.arg(flag);
     hide_console(&mut command);
     let output = command.output().ok()?;
+    let version = parse_version(name, &String::from_utf8_lossy(&output.stdout))?;
+    Some(EngineInfo { path, version })
+}
 
-    // "sing-box version 1.14.3" / "OpenVPN 2.6.14 x86_64-pc-linux-gnu [SSL …]"
-    let text = String::from_utf8_lossy(&output.stdout);
-    // Psiphon has no version number, only the git revision it was built from: "  Revision: c4a09096ab"
-    if let Some(revision) = text.lines().find_map(|line| line.trim().strip_prefix("Revision:")) {
-        return Some(EngineInfo { path, version: format!("rev {}", revision.trim()) });
+/// "sing-box version 1.14.3" / "OpenVPN 2.6.14 x86_64-pc-linux-gnu [SSL …]" → the first number.
+/// Psiphon has no version number, only the git revision it was built from: "  Revision: c4a09096ab".
+/// (sing-box prints a `Revision:` line too, so that's only read for Psiphon.)
+fn parse_version(name: &str, text: &str) -> Option<String> {
+    if name == crate::engine::psiphon::BINARY {
+        let revision = text.lines().find_map(|line| line.trim().strip_prefix("Revision:"))?;
+        return Some(format!("rev {}", revision.trim()));
     }
     let version = text
         .lines()
         .next()?
         .split_whitespace()
-        .find(|word| word.starts_with(|c: char| c.is_ascii_digit()))?
-        .to_owned();
-    Some(EngineInfo { path, version })
+        .find(|word| word.starts_with(|c: char| c.is_ascii_digit()))?;
+    Some(version.to_owned())
 }
 
 /// The release archive for this OS/CPU: (file name suffix, SHA-256).
@@ -248,6 +252,16 @@ mod tests {
         assert!(paths::bin_dir(&dir).join("libcronet.so").is_file());
         assert!(!dir.join("sing-box-staging").exists());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parses_engine_versions() {
+        let singbox = "sing-box version 1.14.3\n\nEnvironment: go1.27.2 linux/amd64\nTags: with_gvisor\nRevision: 926876328c5be556512483815621f4791f2844d7\nCGO: enabled\n";
+        assert_eq!(parse_version("sing-box", singbox).unwrap(), "1.14.3");
+        assert_eq!(parse_version("openvpn", "OpenVPN 2.7.8 x86_64-pc-linux-gnu [SSL (OpenSSL)]\n").unwrap(), "2.7.8");
+        let psiphon = "Psiphon Console Client\n  Build Date: 2026-10-05\n  Built With: go1.24\n  Repository: github.com/Psiphon-Labs/psiphon-tunnel-core\n  Revision: c4a09096ab\n";
+        assert_eq!(parse_version(crate::engine::psiphon::BINARY, psiphon).unwrap(), "rev c4a09096ab");
+        assert_eq!(parse_version("sing-box", ""), None);
     }
 
     #[cfg(target_os = "linux")]
