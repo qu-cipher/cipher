@@ -24,6 +24,10 @@ export struct ConfigData {
     // 0 untested, 1 good, 2 ok, 3 slow, 4 testing, 5 failed
     latency-level: int,
     removable: bool,
+    // A group heading (grouped view): `name` is the group, `protocol` its badge color, id -1.
+    header: bool,
+    count: int,
+    collapsed: bool,
 }
 
 export struct PresetData {
@@ -64,6 +68,8 @@ export global AppState {
     in property <int> config-total;
     in property <[string]> filters: ["All"];
     in-out property <int> filter-index;
+    // Group the list by protocol (saved with the settings)
+    in-out property <bool> group-configs: true;
     in property <bool> testing;
 
     // ── Navigation (UI only) ──
@@ -146,6 +152,10 @@ export global AppState {
     callback select-config(int);
     callback remove-config(int);
     callback filter-changed(int);
+    // after `group-configs` changed
+    callback grouping-changed();
+    // a group heading was clicked: its name
+    callback toggle-group(string);
     callback test-latency();
     callback add-links(string);
     callback submit-credentials();

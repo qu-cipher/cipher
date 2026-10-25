@@ -1,0 +1,60 @@
+import { Theme } from "../theme.slint";
+import { ConfigData } from "../state.slint";
+
+// Heading of a protocol group in the Configs list. Click to fold the group.
+export component GroupHeader inherits Rectangle {
+    in property <ConfigData> data;
+
+    callback clicked();
+
+    height: 28px;
+    border-radius: 8px;
+    background: touch.has-hover ? Theme.surface : transparent;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 6px;
+        padding-right: 10px;
+        spacing: 6px;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: data.collapsed ? @image-url("../../assets/icons/MdiChevronRight.svg") : @image-url("../../assets/icons/MdiChevronDown.svg");
+                width: 16px;
+                height: 16px;
+                colorize: Theme.text-muted;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: Theme.protocol-color(data.protocol);
+            }
+        }
+
+        Text {
+            text: data.name;
+            font-size: 12px;
+            font-weight: 700;
+            vertical-alignment: center;
+            color: Theme.text;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: data.count;
+            font-size: 11px;
+            vertical-alignment: center;
+            color: Theme.text-faint;
+        }
+    }
+}

@@ -39,6 +39,8 @@ for an existing engine, and runs that engine as a child process:
   Rules are checked top to bottom. One-click presets: Iran / China / Russia direct, Block ads. The default
   route can be Direct, so that only matching traffic uses the VPN. Domains routed direct also resolve
   through the direct DNS server.
+- **Configs grouped by protocol** (VLESS, Trojan, …, with *Built-In* for Psiphon); groups fold, and the
+  grouping toggles from the Configs toolbar.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
   (DNS-over-HTTPS through the tunnel).
 - **Engine management:** downloads a pinned sing-box release, and a pinned Psiphon ConsoleClient build
@@ -90,7 +92,7 @@ cargo test -- --ignored     # also: real `sing-box check` on generated configs, 
 CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture
                             # drives the real UI headlessly and saves a frame per step (raw RGBA, 820×520)
 CIPHER_SCREENSHOTS=/tmp/shots cargo test routing_screenshots -- --ignored
-                            # only the routing editor in Settings; never connects
+                            # Settings (routing, Psiphon) and the Configs list; never connects
 ```
 
 No test connects to a VPN server.

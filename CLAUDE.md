@@ -34,11 +34,13 @@ Use `Toggle` (buttons.slint) instead of the Fluent `Switch`.
 src/
   main.rs            mod decls + slint::include_modules!(); calls app::run()
   app.rs   (~1100 lines) UI glue: callbacks, threads, list refresh, connect/disconnect, settings, engines
-  app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots` never connects: safe)
+  app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, Psiphon, grouped
+                     Configs list; never connects: safe)
   profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name}},
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
                      ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing,
-                     psiphon: PsiphonSettings {network: imported JSON map, region})
+                     psiphon: PsiphonSettings {network: imported JSON map, region}, group_configs=true);
+                     Profile::group() = group label in the Configs list ("VLESS", …, "Built-In" for Psiphon)
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
                      Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
   store.rs           Store persisted as state.json (atomic write, 0600; corrupt → .bak): settings, manual entries,
@@ -70,7 +72,7 @@ ui/
   main-window.slint  AppWindow (820x520, frameless): TitleBar, ConnectPanel | LibraryPanel, Sheets (subscription / links / OpenVPN creds dialogs)
   theme.slint        Theme colors (always dark)
   panels/            connect, library (tabs: subscriptions, configs, settings), configs, subscriptions, settings
-  components/        buttons, config-item, sub-item, tab-bar, title-bar, sheet
+  components/        buttons, config-item, group-header, rule-item, sub-item, tab-bar, title-bar, sheet
 assets/              Geist.ttf, Mdi*.svg icons
 tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2) — must round-trip unchanged
 ```
@@ -88,6 +90,8 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   Proxy modes get a `resolve` action before the first IP rule. Details in docs/singbox-config.md §6.1.
 - **Imports**: `import_files` by extension: `.ovpn`, `.conf` (WireGuard), else text of links. Links dialog → `parse_links`.
   Subscriptions update in place; selection follows the same server name.
+- **Configs grouping**: `refresh_configs` → `grouped()` sorts rows by `GROUP_ORDER` and inserts heading rows
+  (`ConfigData.header`, id -1, `count`, `collapsed`); folded groups live in `Shared.collapsed` (session only).
 - **Latency test**: TCP connect (3s, 16 workers) to `Profile::tcp_endpoint()`; UDP protocols skipped.
 - **UI contract**: Rust owns data; UI only calls `AppState` callbacks. Adding a UI feature = property/callback in
   `state.slint` + handler in `app.rs` `bind_callbacks`.
@@ -110,7 +114,7 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 ## Status & history (as of 2026-10-26)
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 67 tests passing at last count (Psiphon added 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 68 tests passing at last count (Psiphon + config grouping added 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:

@@ -33,6 +33,11 @@ const MODES: [ConnectionMode; 3] = [ConnectionMode::Tunnel, ConnectionMode::Syst
 /// Same order as `route-defaults` / `rule-targets` in the UI.
 const ROUTE_DEFAULTS: [Target; 2] = [Target::Proxy, Target::Direct];
 const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
+/// Order of the groups in the grouped Configs list (`Profile::group`).
+const GROUP_ORDER: [&str; 15] = [
+    "Built-In", "VLESS", "VMess", "Trojan", "Shadowsocks", "Hysteria2", "TUIC", "AnyTLS", "WireGuard", "OpenVPN",
+    "SOCKS", "HTTP", "Direct", "Selector", "URLTest",
+];
 const STARTUP_GRACE: Duration = Duration::from_millis(1500);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// How long the admin password dialog may stay open (for Psiphon: also its first connection).
@@ -65,6 +70,8 @@ struct Shared {
     cancel: AtomicBool,
     filter: Mutex<Filter>,
     latency: Mutex<HashMap<u64, Latency>>,
+    /// Collapsed groups in the Configs list (this session only).
+    collapsed: Mutex<HashSet<&'static str>>,
     updating: Mutex<HashSet<u64>>,
     notice_seq: AtomicU64,
     /// The config the sign-in dialog is for, and whether to connect after it.
@@ -99,6 +106,7 @@ fn init(ui: &AppWindow) -> (Ctx, Timer) {
         cancel: AtomicBool::new(false),
         filter: Mutex::new(Filter::All),
         latency: Mutex::new(HashMap::new()),
+        collapsed: Mutex::new(HashSet::new()),
         updating: Mutex::new(HashSet::new()),
         notice_seq: AtomicU64::new(0),
         credentials_for: Mutex::new(None),
@@ -165,6 +173,20 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
     on!(ui, ctx, on_select_config, |ui, ctx, id: i32| select_config(&ui, ctx, id as u64));
     on!(ui, ctx, on_remove_config, |ui, ctx, id: i32| remove_config(&ui, ctx, id as u64));
     on!(ui, ctx, on_filter_changed, |ui, ctx, index: i32| filter_changed(&ui, ctx, index));
+    on!(ui, ctx, on_grouping_changed, |ui, ctx| {
+        settings_changed(&ui, ctx);
+        refresh_configs(&ui, ctx);
+    });
+    on!(ui, ctx, on_toggle_group, |ui, ctx, name: SharedString| {
+        let Some(group) = GROUP_ORDER.iter().find(|g| **g == name.as_str()) else { return };
+        {
+            let mut collapsed = ctx.collapsed.lock().unwrap();
+            if !collapsed.remove(group) {
+                collapsed.insert(group);
+            }
+        }
+        refresh_configs(&ui, ctx);
+    });
     on!(ui, ctx, on_test_latency, |ui, ctx| test_latency(&ui, ctx));
     on!(ui, ctx, on_add_links, |ui, ctx, text: SharedString| add_links(&ui, ctx, &text));
     on!(ui, ctx, on_import_files, |ui, ctx| import_files(&ui, ctx));
@@ -316,7 +338,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
         Filter::Subscription(id) => 2 + store.subscriptions.iter().position(|s| s.id == id).unwrap_or(0),
     };
 
-    let rows: Vec<ConfigData> = store
+    let mut rows: Vec<(&Profile, ConfigData)> = store
         .all_entries()
         .filter(|(source, entry)| match *filter {
             Filter::All => true,
@@ -325,7 +347,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
         })
         .map(|(source, entry)| {
             let (latency, level) = latency_display(latency.get(&entry.id).copied());
-            ConfigData {
+            (&entry.profile, ConfigData {
                 id: entry.id as i32,
                 name: entry.profile.name().into(),
                 protocol: entry.profile.protocol().into(),
@@ -333,9 +355,14 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
                 latency: latency.into(),
                 latency_level: level,
                 removable: source.is_none() && !store::is_builtin(entry.id),
-            }
+                ..Default::default()
+            })
         })
         .collect();
+    let rows = match store.settings.group_configs {
+        true => grouped(&mut rows, &ctx.collapsed.lock().unwrap()),
+        false => rows.into_iter().map(|(_, row)| row).collect(),
+    };
 
     state.set_filters(ModelRc::new(VecModel::from(filters)));
     state.set_filter_index(filter_index as i32);
@@ -354,6 +381,31 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
         }
         None => state.set_selected_id(-1),
     }
+}
+
+/// Sorts rows into protocol groups, each under a heading row; collapsed groups keep only the heading.
+fn grouped(rows: &mut [(&Profile, ConfigData)], collapsed: &HashSet<&str>) -> Vec<ConfigData> {
+    let rank = |group: &str| GROUP_ORDER.iter().position(|g| *g == group).unwrap_or(GROUP_ORDER.len());
+    rows.sort_by_key(|(profile, _)| rank(profile.group()));
+
+    let mut out = Vec::new();
+    for chunk in rows.chunk_by(|(a, _), (b, _)| a.group() == b.group()) {
+        let group = chunk[0].0.group();
+        let is_collapsed = collapsed.contains(group);
+        out.push(ConfigData {
+            id: -1,
+            name: group.into(),
+            protocol: chunk[0].1.protocol.clone(),
+            header: true,
+            count: chunk.len() as i32,
+            collapsed: is_collapsed,
+            ..Default::default()
+        });
+        if !is_collapsed {
+            out.extend(chunk.iter().map(|(_, row)| row.clone()));
+        }
+    }
+    out
 }
 
 fn source_label(source: Option<&store::StoredSubscription>, id: u64) -> &str {
@@ -978,6 +1030,7 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_mode(MODES.iter().position(|m| *m == settings.mode).unwrap_or(0) as i32);
     state.set_proxy_port(settings.proxy_port.to_string().into());
     state.set_tunnel_proxy(settings.tunnel_proxy);
+    state.set_group_configs(settings.group_configs);
     state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
     let regions: Vec<SharedString> = psiphon::REGIONS
         .iter()
@@ -1013,6 +1066,7 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         // While a half-typed port is invalid, keep the last good one.
         proxy_port: state.get_proxy_port().trim().parse().ok().filter(|&p| p > 0).unwrap_or(store.settings.proxy_port),
         tunnel_proxy: state.get_tunnel_proxy(),
+        group_configs: state.get_group_configs(),
         // Rules and presets are edited through their own callbacks.
         routing: Routing {
             default: ROUTE_DEFAULTS.get(state.get_route_default() as usize).copied().unwrap_or_default(),
@@ -1286,6 +1340,34 @@ mod screenshots;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn groups_configs_by_protocol() {
+        let profiles: Vec<Profile> = [
+            "trojan://pw@a.example.com:443#T1",
+            "vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443#V1",
+            "trojan://pw@c.example.com:443#T2",
+        ]
+        .iter()
+        .map(|link| import::parse_link(link).unwrap())
+        .chain([Profile::Psiphon { name: "Psiphon Tunnel".into() }])
+        .collect();
+        let row = |p: &Profile| ConfigData { name: p.name().into(), protocol: p.protocol().into(), ..Default::default() };
+        let mut rows: Vec<_> = profiles.iter().map(|p| (p, row(p))).collect();
+
+        let names = |rows: &[ConfigData]| rows.iter().map(|r| (r.header, r.name.to_string(), r.count)).collect::<Vec<_>>();
+        let out = grouped(&mut rows, &HashSet::new());
+        assert_eq!(names(&out), [
+            (true, "Built-In".into(), 1), (false, "Psiphon Tunnel".into(), 0),
+            (true, "VLESS".into(), 1), (false, "V1".into(), 0),
+            (true, "Trojan".into(), 2), (false, "T1".into(), 0), (false, "T2".into(), 0),
+        ]);
+        assert_eq!(out[4].protocol, "trojan");
+
+        let out = grouped(&mut rows, &HashSet::from(["Trojan"]));
+        assert_eq!(out.last().map(|r| (r.header, r.collapsed)), Some((true, true)));
+        assert_eq!(out.len(), 5);
+    }
 
     #[test]
     fn formats_sizes_and_ages() {

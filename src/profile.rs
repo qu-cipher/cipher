@@ -88,6 +88,29 @@ impl Profile {
         }
     }
 
+    /// Group in the Configs list: the protocol's full name, or "Built-In" for the app's own tunnels.
+    pub fn group(&self) -> &'static str {
+        match self {
+            Profile::Proxy { outbound, .. } => match outbound {
+                Outbound::Direct(_) => "Direct",
+                Outbound::Socks(_) => "SOCKS",
+                Outbound::Http(_) => "HTTP",
+                Outbound::Shadowsocks(_) => "Shadowsocks",
+                Outbound::Vmess(_) => "VMess",
+                Outbound::Vless(_) => "VLESS",
+                Outbound::Trojan(_) => "Trojan",
+                Outbound::Hysteria2(_) => "Hysteria2",
+                Outbound::Tuic(_) => "TUIC",
+                Outbound::AnyTls(_) => "AnyTLS",
+                Outbound::Selector(_) => "Selector",
+                Outbound::Urltest(_) => "URLTest",
+            },
+            Profile::WireGuard { .. } => "WireGuard",
+            Profile::OpenVpn { .. } => "OpenVPN",
+            Profile::Psiphon { .. } => "Built-In",
+        }
+    }
+
     /// Server address for a TCP latency test. `None` for UDP-only protocols,
     /// where a TCP connect says nothing about reachability.
     pub fn tcp_endpoint(&self) -> Option<(String, u16)> {
@@ -152,6 +175,8 @@ pub struct Settings {
     /// Split tunneling: routing rules, presets and the default route (sing-box only).
     pub routing: Routing,
     pub psiphon: PsiphonSettings,
+    /// Group the Configs list by protocol.
+    pub group_configs: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -183,6 +208,7 @@ impl Default for Settings {
             tunnel_proxy: false,
             routing: Routing::default(),
             psiphon: PsiphonSettings::default(),
+            group_configs: true,
         }
     }
 }

@@ -1,8 +1,9 @@
 import { ListView, ComboBox } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { AppState } from "../state.slint";
-import { PillButton } from "../components/buttons.slint";
+import { IconButton, PillButton } from "../components/buttons.slint";
 import { ConfigItem } from "../components/config-item.slint";
+import { GroupHeader } from "../components/group-header.slint";
 
 export component ConfigsPanel inherits VerticalLayout {
     spacing: 8px;
@@ -15,6 +16,19 @@ export component ConfigsPanel inherits VerticalLayout {
             model: AppState.filters;
             current-index <=> AppState.filter-index;
             selected => { AppState.filter-changed(self.current-index); }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: @image-url("../../assets/icons/MdiFormatListGroup.svg");
+                icon-color: AppState.group-configs ? Theme.accent : Theme.text-muted;
+                hover-color: AppState.group-configs ? Theme.accent : Theme.text;
+                clicked => {
+                    AppState.group-configs = !AppState.group-configs;
+                    AppState.grouping-changed();
+                }
+            }
         }
 
         PillButton {
@@ -58,7 +72,12 @@ export component ConfigsPanel inherits VerticalLayout {
         for config in AppState.configs: VerticalLayout {
             padding-bottom: 5px;
 
-            ConfigItem {
+            if config.header: GroupHeader {
+                data: config;
+                clicked => { AppState.toggle-group(config.name); }
+            }
+
+            if !config.header: ConfigItem {
                 data: config;
                 selected: config.id == AppState.selected-id;
                 show-source: AppState.filter-index == 0;

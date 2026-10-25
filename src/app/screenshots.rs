@@ -255,6 +255,20 @@ fn routing_screenshots() {
     d.shot("r10-configs-psiphon");
     state.invoke_select_config(0);
     d.shot("r11-psiphon-selected");
+
+    // Grouped by protocol, then one group folded, then ungrouped.
+    state.invoke_add_links(
+        "trojan://pw@a.example.com:443#Trojan A\n\
+         vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443?security=tls#VLESS B\n\
+         trojan://pw@c.example.com:443#Trojan C\n\
+         hy2://pw@d.example.com:443#Hysteria D".into(),
+    );
+    d.shot("r12-configs-grouped");
+    state.invoke_toggle_group("Trojan".into());
+    d.shot("r13-group-collapsed");
+    state.set_group_configs(false);
+    state.invoke_grouping_changed();
+    d.shot("r14-ungrouped");
     state.set_current_tab(2);
 
     // Scrolled down to the rule list.
