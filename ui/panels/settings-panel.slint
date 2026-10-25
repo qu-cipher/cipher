@@ -2,6 +2,7 @@ import { ComboBox, LineEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { AppState, ConnectionState } from "../state.slint";
 import { PillButton, Toggle } from "../components/buttons.slint";
+import { RuleItem } from "../components/rule-item.slint";
 
 component Section inherits VerticalLayout {
     in property <string> title;
@@ -99,6 +100,58 @@ export component SettingsPanel inherits ScrollView {
                 }
             }
 
+            Row {
+                label: "Default route";
+                hint: "Where traffic no rule matches goes. Direct: only matching traffic uses the VPN.";
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 110px;
+                        model: AppState.route-defaults;
+                        current-index <=> AppState.route-default;
+                        selected => { AppState.settings-changed(); }
+                    }
+                }
+            }
+
+            for preset[i] in AppState.presets: Row {
+                label: preset.name;
+                hint: preset.hint;
+                Toggle {
+                    checked: preset.enabled;
+                    toggled => { AppState.toggle-preset(i); }
+                }
+            }
+
+            Row {
+                label: "Rules";
+                hint: "Domains, IPs, ports, apps and geo lists. Checked top to bottom before the presets; the first match wins.";
+                VerticalLayout {
+                    alignment: center;
+                    PillButton {
+                        text: "Add rule";
+                        icon: @image-url("../../assets/icons/MdiPlus.svg");
+                        clicked => { AppState.edit-rule(-1); }
+                    }
+                }
+            }
+
+            for rule[i] in AppState.rules: RuleItem {
+                data: rule;
+                first: i == 0;
+                last: i == AppState.rules.length - 1;
+                toggled => { AppState.toggle-rule(i); }
+                edit => { AppState.edit-rule(i); }
+                move(delta) => { AppState.move-rule(i, delta); }
+                remove => { AppState.remove-rule(i); }
+            }
+
+            Text {
+                text: "Routing applies to sing-box configs; OpenVPN ignores it. Geo lists download through the VPN on connect.";
+                font-size: 10px;
+                color: Theme.text-faint;
+                wrap: word-wrap;
+            }
         }
 
         Section {

@@ -110,7 +110,18 @@ The legacy `address: "tls://…"` format and the top-level `dns.fakeip` object w
 
 ### 3.2 `dns.rules[]`
 
-The generator doesn't need any yet. `DnsRule` supports `action` (`route` / `route-options` / `reject` / `predefined`), `server`, and the common matchers `domain*`, `query_type`, `inbound`, `ip_is_private`, `clash_mode`, `rule_set`.
+Only emitted for routing rules that match domains (Domain, Keyword, Geosite). Each one picks the DNS server
+for the same domains, in the same order as the route rules (§6.1):
+
+| Rule target | DNS rule |
+|---|---|
+| Direct | `{ …matcher, "action": "route", "server": "local" }`: domestic CDNs answer with nearby IPs |
+| Proxy | `{ …matcher, "action": "route", "server": "remote" }`, so an earlier proxy rule beats a later direct one |
+| Block | `{ …matcher, "action": "reject" }` |
+
+IP, port and app rules get no DNS rule: DNS queries carry no such information (in Tunnel mode they come from systemd-resolved anyway).
+
+`DnsRule` supports `action` (`route` / `route-options` / `reject` / `predefined`), `server`, and the common matchers `domain*`, `query_type`, `inbound`, `ip_is_private`, `clash_mode`, `rule_set`.
 The old `{ "outbound": "any", "server": … }` rule is deprecated. Use `route.default_domain_resolver` instead.
 
 ## 4. `inbounds`
@@ -131,7 +142,7 @@ Only two inbound types are modeled (`Inbound` enum), because this is a client.
 | `strict_route` | Hardcoded `true` | Windows: stops multihomed DNS leaks. Linux: blocks traffic that bypasses the TUN |
 | `mtu` | not set | sing-box picks a sane default |
 | `dns_mode` | not set | `DnsMode` enum (`disabled` / `native` / `hijack`) |
-| `route_exclude_address`, `include/exclude_interface`, `include/exclude_uid` | not set | For split tunneling later |
+| `route_exclude_address`, `include/exclude_interface`, `include/exclude_uid` | not set | Split tunneling is done with route rules instead (§6.1), which work in every mode |
 
 **Mixed** (proxy modes, or Tunnel mode with `Settings.tunnel_proxy`): a local SOCKS5/HTTP proxy on `127.0.0.1:<proxy_port>` (default 2080). In System proxy mode it also has `set_system_proxy: true`.
 
@@ -196,8 +207,42 @@ How a `.conf` file maps to it (`src/import/wireguard.rs`):
 1. `sniff` must come first, because protocol matching depends on it.
 2. `hijack-dns` sends captured DNS packets to our `dns` section. This replaces the old `dns` outbound. Tunnel mode only: proxy clients send domain names, not DNS packets.
 3. LAN bypass, only when `Settings.bypass_lan` is set.
+4. Routing rules (§6.1).
+
+`final` is `proxy`, or `direct` when `Settings.routing.default` is Direct (whitelist mode).
 
 In the proxy modes `auto_detect_interface` is left out too: without a TUN there is no loop to prevent.
+
+### 6.1 Routing rules (`src/routing.rs` → `generate/routing.rs`)
+
+`Routing::effective_rules()`: the enabled custom rules top to bottom, then the presets' rules (Block before Direct). The first match wins, so custom rules override presets.
+
+| Rule kind | Route rule matcher |
+|---|---|
+| Domain | `domain_suffix` (the domain and its subdomains) |
+| Keyword | `domain_keyword` |
+| IP | `ip_cidr` (bare IPs normalized to `/32` / `/128`) |
+| Port | `port` + `port_range` in one rule (sing-box ORs them) |
+| App | `process_name`, and `process_path` for values with `/` or `\`. Two rules, because sing-box ANDs these fields. `find_process` isn't needed: sing-box turns process lookup on when process rules exist |
+| Geosite / GeoIP | `rule_set: ["geosite-<code>"]` / `["geoip-<code>"]` |
+
+Targets: Proxy → `action: route, outbound: proxy`; Direct → `outbound: direct`; Block → `action: reject`.
+
+Presets: Iran direct (`geosite-category-ir` + `geoip-ir`), China direct (`geosite-cn` + `geoip-cn`), Russia direct (`geosite-category-ru` + `geoip-ru`), Block ads (`geosite-category-ads-all`).
+
+**Rule sets** are remote binary `.srs` files from `SagerNet/sing-geosite` and `SagerNet/sing-geoip` (`rule-set` branch), deduplicated by tag:
+
+```json
+{ "type": "remote", "tag": "geoip-ir", "format": "binary",
+  "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs", "download_detour": "proxy" }
+```
+
+- They download through the proxy, since GitHub may be blocked on the direct path.
+- They're cached in `cache.db` and refreshed by sing-box (default interval 1d).
+- If the first download fails, sing-box doesn't start; `explain()` turns that into a hint.
+- `sing-box check` doesn't download them.
+
+**IP rules in the proxy modes:** a SOCKS/HTTP client sends a domain name, so `ip_cidr` / geoip never match on their own. In System proxy and Proxy only modes the generator puts one `{ "action": "resolve" }` right before the first IP or GeoIP rule. It resolves through the default DNS server (`remote`, DoH through the proxy), so nothing leaks. The cost is that later proxied connections go to the resolved IP instead of the domain. Tunnel mode already sees destination IPs and doesn't need it.
 
 `RuleAction` enum: `route`, `route-options`, `reject`, `hijack-dns`, `sniff`, `resolve`. `RouteRule` keeps the client-relevant matchers (`protocol`, `network`, `domain*`, `ip_cidr`, `ip_is_private`, `port*`, `process_name`/`process_path`, `clash_mode`, `rule_set`, `invert`). Rule sets can be `inline`, `local` or `remote`.
 

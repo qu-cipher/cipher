@@ -9,8 +9,9 @@ use crate::engine::singbox::config::log::LogLevel;
 use crate::import::{self, ImportError};
 use crate::engine::singbox::generate::PROXY_LISTEN;
 use crate::profile::{ConnectionMode, Credentials, Profile, Settings};
+use crate::routing::{Preset, Rule, RuleKind, Routing, Target};
 use crate::store::{self, Store};
-use crate::{AppState, AppWindow, ConfigData, ConnectionState, SubscriptionData};
+use crate::{AppState, AppWindow, ConfigData, ConnectionState, PresetData, RuleData, SubscriptionData};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 use std::{
     collections::{HashMap, HashSet},
@@ -29,6 +30,9 @@ use std::{
 const LOG_LEVELS: [LogLevel; 4] = [LogLevel::Debug, LogLevel::Info, LogLevel::Warn, LogLevel::Error];
 /// Same order as the mode switch in the UI.
 const MODES: [ConnectionMode; 3] = [ConnectionMode::Tunnel, ConnectionMode::SystemProxy, ConnectionMode::ProxyOnly];
+/// Same order as `route-defaults` / `rule-targets` in the UI.
+const ROUTE_DEFAULTS: [Target; 2] = [Target::Proxy, Target::Direct];
+const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
 const STARTUP_GRACE: Duration = Duration::from_millis(1500);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// How long the admin password dialog may stay open.
@@ -103,6 +107,7 @@ fn init(ui: &AppWindow) -> (Ctx, Timer) {
     bind_window(ui);
     bind_callbacks(ui, &ctx);
     load_settings(ui, &ctx);
+    refresh_routing(ui, &ctx);
     refresh_all(ui, &ctx);
     refresh_engines(ui, &ctx);
 
@@ -181,6 +186,25 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
         }
     });
     on!(ui, ctx, on_settings_changed, |ui, ctx| settings_changed(&ui, ctx));
+    on!(ui, ctx, on_toggle_preset, |ui, ctx, index: i32| toggle_preset(&ui, ctx, index as usize));
+    on!(ui, ctx, on_edit_rule, |ui, ctx, index: i32| edit_rule(&ui, ctx, index));
+    on!(ui, ctx, on_save_rule, |ui, ctx| save_rule(&ui, ctx));
+    on!(ui, ctx, on_remove_rule, |ui, ctx, index: i32| change_rules(&ui, ctx, |rules| {
+        if (index as usize) < rules.len() {
+            rules.remove(index as usize);
+        }
+    }));
+    on!(ui, ctx, on_toggle_rule, |ui, ctx, index: i32| change_rules(&ui, ctx, |rules| {
+        if let Some(rule) = rules.get_mut(index as usize) {
+            rule.enabled = !rule.enabled;
+        }
+    }));
+    on!(ui, ctx, on_move_rule, |ui, ctx, index: i32, delta: i32| change_rules(&ui, ctx, |rules| {
+        let to = index + delta;
+        if index >= 0 && to >= 0 && (to as usize) < rules.len() && (index as usize) < rules.len() {
+            rules.swap(index as usize, to as usize);
+        }
+    }));
     on!(ui, ctx, on_install_singbox, |ui, ctx| install_singbox(&ui, ctx));
     on!(ui, ctx, on_open_data_dir, |ui, ctx| {
         if let Err(e) = paths::data_dir().and_then(|dir| open_external(&dir).map_err(Into::into)) {
@@ -862,6 +886,8 @@ fn explain(reason: String) -> String {
         "sing-box isn't installed yet: download it in Settings → Engines.".into()
     } else if lower.contains("`openvpn") && lower.contains("not found") {
         "OpenVPN isn't installed: see Settings → Engines.".into()
+    } else if lower.contains("rule-set") {
+        "Couldn't download the routing rule sets: check the server, or turn off geo rules in Settings → Routing.".into()
     } else if lower.contains("address already in use") || lower.contains("only one usage of each socket address") {
         "The proxy port is already in use: pick another one in Settings.".into()
     } else {
@@ -928,6 +954,7 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_mode(MODES.iter().position(|m| *m == settings.mode).unwrap_or(0) as i32);
     state.set_proxy_port(settings.proxy_port.to_string().into());
     state.set_tunnel_proxy(settings.tunnel_proxy);
+    state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
     if let Ok(dir) = paths::data_dir() {
         state.set_data_dir(dir.display().to_string().into());
     }
@@ -952,12 +979,110 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         // While a half-typed port is invalid, keep the last good one.
         proxy_port: state.get_proxy_port().trim().parse().ok().filter(|&p| p > 0).unwrap_or(store.settings.proxy_port),
         tunnel_proxy: state.get_tunnel_proxy(),
+        // Rules and presets are edited through their own callbacks.
+        routing: Routing {
+            default: ROUTE_DEFAULTS.get(state.get_route_default() as usize).copied().unwrap_or_default(),
+            ..store.settings.routing.clone()
+        },
     };
 
     if store.settings != settings {
         store.settings = settings;
         save(ui, ctx, &store);
     }
+}
+
+// ───────────────────────────── Routing ─────────────────────────────
+
+fn refresh_routing(ui: &AppWindow, ctx: &Ctx) {
+    let state = ui.global::<AppState>();
+    let store = ctx.store.lock().unwrap();
+    let routing = &store.settings.routing;
+
+    let presets: Vec<PresetData> = Preset::ALL
+        .iter()
+        .map(|p| PresetData { name: p.label().into(), hint: p.hint().into(), enabled: routing.presets.contains(p) })
+        .collect();
+    let rules: Vec<RuleData> = routing
+        .rules
+        .iter()
+        .map(|r| RuleData {
+            enabled: r.enabled,
+            kind: r.kind.label().into(),
+            summary: r.summary().into(),
+            target: target_label(r.target).into(),
+        })
+        .collect();
+
+    state.set_presets(ModelRc::new(VecModel::from(presets)));
+    state.set_rules(ModelRc::new(VecModel::from(rules)));
+}
+
+fn target_label(target: Target) -> &'static str {
+    match target {
+        Target::Proxy => "Proxy",
+        Target::Direct => "Direct",
+        Target::Block => "Block",
+    }
+}
+
+fn toggle_preset(ui: &AppWindow, ctx: &Ctx, index: usize) {
+    let Some(&preset) = Preset::ALL.get(index) else { return };
+    {
+        let mut store = ctx.store.lock().unwrap();
+        let presets = &mut store.settings.routing.presets;
+        match presets.iter().position(|p| *p == preset) {
+            Some(i) => { presets.remove(i); }
+            None => presets.push(preset),
+        }
+        save(ui, ctx, &store);
+    }
+    refresh_routing(ui, ctx);
+}
+
+/// Changes the custom rules, saves and redraws the list.
+fn change_rules(ui: &AppWindow, ctx: &Ctx, f: impl FnOnce(&mut Vec<Rule>)) {
+    {
+        let mut store = ctx.store.lock().unwrap();
+        f(&mut store.settings.routing.rules);
+        save(ui, ctx, &store);
+    }
+    refresh_routing(ui, ctx);
+}
+
+/// Opens the rule editor, filled in for an existing rule (`index` ≥ 0) or empty.
+fn edit_rule(ui: &AppWindow, ctx: &Ctx, index: i32) {
+    let state = ui.global::<AppState>();
+    let store = ctx.store.lock().unwrap();
+    let rule = usize::try_from(index).ok().and_then(|i| store.settings.routing.rules.get(i));
+
+    let (index, kind, target, values) = match rule {
+        Some(rule) => (index, rule.kind, rule.target, rule.values.join("\n")),
+        None => (-1, RuleKind::Domain, Target::Direct, String::new()),
+    };
+    state.set_rule_dialog_index(index);
+    state.set_rule_dialog_kind(RuleKind::ALL.iter().position(|k| *k == kind).unwrap_or(0) as i32);
+    state.set_rule_dialog_target(TARGETS.iter().position(|t| *t == target).unwrap_or(0) as i32);
+    state.set_rule_dialog_values(values.into());
+    state.set_rule_dialog_error(SharedString::new());
+    state.set_rule_dialog_open(true);
+}
+
+fn save_rule(ui: &AppWindow, ctx: &Ctx) {
+    let state = ui.global::<AppState>();
+    let kind = RuleKind::ALL.get(state.get_rule_dialog_kind() as usize).copied().unwrap_or(RuleKind::Domain);
+    let target = TARGETS.get(state.get_rule_dialog_target() as usize).copied().unwrap_or_default();
+    let values = match Rule::parse(kind, &state.get_rule_dialog_values()) {
+        Ok(values) => values,
+        Err(e) => return state.set_rule_dialog_error(e.into()),
+    };
+
+    let index = state.get_rule_dialog_index();
+    change_rules(ui, ctx, |rules| match usize::try_from(index).ok().and_then(|i| rules.get_mut(i)) {
+        Some(rule) => *rule = Rule { kind, values, target, ..rule.clone() },
+        None => rules.push(Rule { enabled: true, kind, values, target }),
+    });
+    state.set_rule_dialog_open(false);
 }
 
 // ───────────────────────────── Engines ─────────────────────────────

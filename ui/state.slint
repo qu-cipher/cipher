@@ -26,6 +26,21 @@ export struct ConfigData {
     removable: bool,
 }
 
+export struct PresetData {
+    name: string,
+    hint: string,
+    enabled: bool,
+}
+
+export struct RuleData {
+    enabled: bool,
+    // "Domain", "App", ...
+    kind: string,
+    summary: string,
+    // "Proxy", "Direct" or "Block"
+    target: string,
+}
+
 export global AppState {
     // ── Connection ──
     in property <ConnectionState> connection: ConnectionState.disconnected;
@@ -86,6 +101,25 @@ export global AppState {
     in-out property <string> proxy-port: "2080";
     in-out property <bool> tunnel-proxy;
     in property <string> data-dir;
+
+    // ── Routing ──
+    out property <[string]> route-defaults: ["Proxy", "Direct"];
+    // index into `route-defaults`
+    in-out property <int> route-default;
+    in property <[PresetData]> presets;
+    in property <[RuleData]> rules;
+    // Same order as `RuleKind::ALL` / `Target` in Rust.
+    out property <[string]> rule-kinds: ["Domain", "Keyword", "IP", "Port", "App", "Geosite", "GeoIP"];
+    out property <[string]> rule-targets: ["Proxy", "Direct", "Block"];
+
+    // Rule editor: Rust opens it (edit-rule) and closes it on a valid save.
+    in-out property <bool> rule-dialog-open;
+    // -1 for a new rule
+    in property <int> rule-dialog-index: -1;
+    in-out property <int> rule-dialog-kind;
+    in-out property <int> rule-dialog-target;
+    in-out property <string> rule-dialog-values;
+    in-out property <string> rule-dialog-error;
     // from Cargo.toml
     in property <string> app-version;
 
@@ -114,6 +148,15 @@ export global AppState {
     callback show-subscription(int);
 
     callback settings-changed();
+    // index into `presets`
+    callback toggle-preset(int);
+    // index into `rules`, or -1 to add one
+    callback edit-rule(int);
+    callback save-rule();
+    callback remove-rule(int);
+    callback toggle-rule(int);
+    // index, then -1 (up) or 1 (down)
+    callback move-rule(int, int);
     callback install-singbox();
     callback open-data-dir();
     // opens a link in the default browser

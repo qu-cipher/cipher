@@ -41,4 +41,11 @@ export global Theme {
         if protocol == "ovpn" { return #fcd34d; }
         return #8a96a8;
     }
+
+    // Badge color per routing target ("Proxy" / "Direct" / "Block").
+    public pure function target-color(target: string) -> color {
+        if target == "Direct" { return root.connected; }
+        if target == "Block" { return root.danger; }
+        return root.accent;
+    }
 }

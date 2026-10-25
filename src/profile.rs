@@ -4,6 +4,7 @@ use crate::engine::singbox::config::{
     log::LogLevel,
     outbound::Outbound,
 };
+use crate::routing::Routing;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -143,6 +144,8 @@ pub struct Settings {
     pub proxy_port: u16,
     /// Also serve the local proxy in Tunnel mode.
     pub tunnel_proxy: bool,
+    /// Split tunneling: routing rules, presets and the default route (sing-box only).
+    pub routing: Routing,
 }
 
 impl Settings {
@@ -162,6 +165,7 @@ impl Default for Settings {
             mode: ConnectionMode::Tunnel,
             proxy_port: 2080,
             tunnel_proxy: false,
+            routing: Routing::default(),
         }
     }
 }

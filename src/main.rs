@@ -5,6 +5,7 @@ mod app;
 mod engine;
 mod import;
 mod profile;
+mod routing;
 mod store;
 
 slint::include_modules!();

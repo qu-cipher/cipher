@@ -1,7 +1,7 @@
-import { LineEdit, TextEdit } from "std-widgets.slint";
+import { ComboBox, LineEdit, TextEdit } from "std-widgets.slint";
 import "../assets/Geist.ttf";
 import { Theme } from "theme.slint";
-import { AppState, ConnectionState, ConfigData, SubscriptionData } from "state.slint";
+import { AppState, ConnectionState, ConfigData, PresetData, RuleData, SubscriptionData } from "state.slint";
 import { TitleBar } from "./components/title-bar.slint";
 import { PillButton } from "./components/buttons.slint";
 import { Sheet } from "./components/sheet.slint";
@@ -9,7 +9,7 @@ import { ConnectPanel } from "./panels/connect-panel.slint";
 import { LibraryPanel } from "./panels/library-panel.slint";
 
 // Rust needs these to talk to the UI.
-export { AppState, ConnectionState, ConfigData, SubscriptionData }
+export { AppState, ConnectionState, ConfigData, PresetData, RuleData, SubscriptionData }
 
 export component AppWindow inherits Window {
     title: "Cipher VPN Client";
@@ -27,6 +27,8 @@ export component AppWindow inherits Window {
     private property <bool> sub-open: AppState.sub-dialog-open;
     private property <bool> links-open: AppState.links-dialog-open;
     private property <bool> creds-open: AppState.creds-dialog-open;
+    private property <bool> rule-open: AppState.rule-dialog-open;
+    changed rule-open => { if self.rule-open { rule-input.focus(); } }
     changed sub-open => { if self.sub-open { url-input.focus(); } }
     changed links-open => { if self.links-open { links-input.focus(); } }
     changed creds-open => { if self.creds-open { username-input.focus(); } }
@@ -193,6 +195,85 @@ export component AppWindow inherits Window {
                 primary: true;
                 enabled: AppState.creds-username != "";
                 clicked => { AppState.submit-credentials(); }
+            }
+        }
+    }
+
+    // ── Routing rule editor ──
+    Sheet {
+        y: 30px;
+        height: root.height - 30px;
+        open: AppState.rule-dialog-open;
+        title: AppState.rule-dialog-index < 0 ? "Add rule" : "Edit rule";
+        sheet-height: AppState.rule-dialog-error != "" ? 300px : 276px;
+        dismiss => { AppState.rule-dialog-open = false; }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            ComboBox {
+                horizontal-stretch: 1;
+                model: AppState.rule-kinds;
+                current-index <=> AppState.rule-dialog-kind;
+            }
+
+            Text {
+                text: "→";
+                vertical-alignment: center;
+                color: Theme.text-muted;
+            }
+
+            ComboBox {
+                horizontal-stretch: 1;
+                model: AppState.rule-targets;
+                current-index <=> AppState.rule-dialog-target;
+            }
+        }
+
+        Text {
+            // Same order as `rule-kinds`.
+            text: [
+                "Domains, one per line or comma-separated. Subdomains match too: example.com, google.com",
+                "Words anywhere in a domain: google, telegram",
+                "IP addresses or CIDR ranges: 1.1.1.1, 10.0.0.0/8, 2001:db8::/32",
+                "Destination ports or ranges: 443, 6881:6889",
+                "Process names or full paths: firefox, chrome.exe, /usr/bin/telegram-desktop",
+                "Geosite lists (sing-geosite names): category-ir, google, netflix",
+                "GeoIP country codes: ir, cn, ru",
+            ][AppState.rule-dialog-kind];
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        rule-input := TextEdit {
+            vertical-stretch: 1;
+            font-size: 12px;
+            wrap: char-wrap;
+            text <=> AppState.rule-dialog-values;
+        }
+
+        if AppState.rule-dialog-error != "": Text {
+            text: AppState.rule-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.rule-dialog-open = false; }
+            }
+
+            PillButton {
+                text: "Save";
+                primary: true;
+                enabled: AppState.rule-dialog-values != "";
+                clicked => { AppState.save-rule(); }
             }
         }
     }

@@ -28,6 +28,11 @@ for an existing engine, and runs that engine as a child process:
   | Proxy only | Local SOCKS5/HTTP proxy on `127.0.0.1:2080`; apps opt in | No |
 
   OpenVPN works in Tunnel mode only.
+- **Split tunneling and routing rules** (sing-box configs, all modes): send domains, keywords, IPs/CIDRs,
+  ports, apps (process name or path), and geosite/geoip lists through the VPN, direct, or block them.
+  Rules are checked top to bottom. One-click presets: Iran / China / Russia direct, Block ads. The default
+  route can be Direct, so that only matching traffic uses the VPN. Domains routed direct also resolve
+  through the direct DNS server.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
   (DNS-over-HTTPS through the tunnel).
 - **Engine management:** downloads a pinned sing-box release and checks its SHA-256.
@@ -75,6 +80,8 @@ cargo test                  # unit tests, config round-trips, generator checks
 cargo test -- --ignored     # also: real `sing-box check` on generated configs, real release download
 CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture
                             # drives the real UI headlessly and saves a frame per step (raw RGBA, 820×520)
+CIPHER_SCREENSHOTS=/tmp/shots cargo test routing_screenshots -- --ignored
+                            # only the routing editor in Settings; never connects
 ```
 
 No test connects to a VPN server.
@@ -108,11 +115,12 @@ No test connects to a VPN server.
 | `src/app.rs` | Glue between the UI and everything else: callbacks, background threads, connecting, latency tests |
 | `src/app/screenshots.rs` | Headless Slint platform for the UI test |
 | `src/profile.rs` | `Profile` (Proxy / WireGuard / OpenVPN), `ConnectionMode`, `Settings` |
+| `src/routing.rs` | Routing rules, presets and the default route; input parsing and normalization |
 | `src/store.rs` | Saved state (`state.json`): configs, subscriptions, selection, settings |
 | `src/import/` | Share-link parsers (one file per protocol in `link/`), WireGuard/OpenVPN files, subscriptions, sing-box JSON |
 | `src/engine/` | `Engine` trait, child-process handling, binary lookup, sing-box download and permissions, OpenVPN engine |
 | `src/engine/singbox/config/` | Typed serde model of the sing-box config (client-side subset, 1.12+ format only) |
-| `src/engine/singbox/generate.rs` | Builds the sing-box config from a profile and settings |
+| `src/engine/singbox/generate.rs` | Builds the sing-box config from a profile and settings (routing rules in `generate/routing.rs`) |
 | `ui/state.slint` | `AppState`: every property and callback shared between Rust and the UI |
 | `ui/main-window.slint`, `ui/panels/`, `ui/components/` | The window, its panels and reusable widgets |
 | `tests/fixtures/` | sing-box JSON that must survive deserialize → serialize unchanged |
@@ -146,7 +154,7 @@ Linux `~/.local/share/cipher_client/`, Windows `%APPDATA%\cipher_client\`:
 | `sing-box.json` / `sing-box.log` | The last generated config and engine log |
 | `openvpn.log` | OpenVPN log |
 | `openvpn.ovpn` | An `ovpn://` config, written while connected and deleted on disconnect |
-| `cache.db` | sing-box cache |
+| `cache.db` | sing-box cache, including downloaded geo rule sets |
 | `bin/` | sing-box downloaded by the app |
 
 ## License

@@ -4,17 +4,20 @@
 use crate::engine::{EngineError, EngineKind};
 use crate::engine::singbox::config::{
     SingBoxConfig,
-    dns::{DNS, DnsServer, HttpsDnsServer, PlainDnsServer},
+    dns::{DNS, DnsRule, DnsServer, HttpsDnsServer, PlainDnsServer},
     endpoint::Endpoint,
     experimental::{CacheFile, Experimental},
     inbound::{Inbound, mixed::MixedInbound, tun::{TunInbound, TunStack}},
     log::Log,
     outbound::{Outbound, direct::DirectOutbound},
-    route::{Route, RouteRule, RuleAction},
+    route::{Route, RouteRule, RuleAction, RuleSet},
     shared::{DialerOptions, DomainResolver, ListenOptions},
 };
 use crate::profile::{ConnectionMode, Profile, Settings};
+use crate::routing::Target;
 use std::path::Path;
+
+mod routing;
 
 pub const PROXY_TAG: &str = "proxy";
 pub const DIRECT_TAG: &str = "direct";
@@ -50,6 +53,9 @@ pub fn build_config(profile: &Profile, settings: &Settings, data_dir: &Path) -> 
         ..Default::default()
     }));
 
+    // Proxy clients send domain names, so IP rules need them resolved first.
+    let routed = routing::build(&settings.routing, !settings.mode.uses_tunnel());
+
     Ok(SingBoxConfig {
         schema: Some(SCHEMA_URL.into()),
         log: Some(Log {
@@ -57,11 +63,11 @@ pub fn build_config(profile: &Profile, settings: &Settings, data_dir: &Path) -> 
             timestamp: Some(true),
             ..Default::default()
         }),
-        dns: Some(dns(settings)),
+        dns: Some(dns(settings, routed.dns_rules)),
         inbounds: inbounds(settings),
         outbounds,
         endpoints,
-        route: Some(route(settings)),
+        route: Some(route(settings, routed.rules, routed.rule_sets)),
         experimental: Some(Experimental {
             cache_file: Some(CacheFile {
                 enabled: Some(true),
@@ -106,8 +112,9 @@ fn inbounds(settings: &Settings) -> Vec<Inbound> {
 }
 
 // Queries go through the tunnel over DoH. The local server only resolves
-// the proxy server's own domain (via `route.default_domain_resolver`).
-fn dns(settings: &Settings) -> DNS {
+// the proxy server's own domain (via `route.default_domain_resolver`)
+// and the domains that routing rules send direct.
+fn dns(settings: &Settings, rules: Vec<DnsRule>) -> DNS {
     DNS {
         servers: vec![
             DnsServer::Https(HttpsDnsServer {
@@ -125,12 +132,13 @@ fn dns(settings: &Settings) -> DNS {
                 ..Default::default()
             }),
         ],
+        rules,
         final_server: Some(DNS_REMOTE_TAG.into()),
         ..Default::default()
     }
 }
 
-fn route(settings: &Settings) -> Route {
+fn route(settings: &Settings, routing_rules: Vec<RouteRule>, rule_set: Vec<RuleSet>) -> Route {
     let tunnel = settings.mode.uses_tunnel();
     let mut rules = vec![RouteRule {
         action: Some(RuleAction::Sniff),
@@ -155,9 +163,17 @@ fn route(settings: &Settings) -> Route {
         });
     }
 
+    rules.extend(routing_rules);
+
+    let final_outbound = match settings.routing.default {
+        Target::Direct => DIRECT_TAG,
+        _ => PROXY_TAG,
+    };
+
     Route {
         rules,
-        final_outbound: Some(PROXY_TAG.into()),
+        rule_set,
+        final_outbound: Some(final_outbound.into()),
         // Keeps the proxy's own connections off the TUN (routing loops). Not needed without one.
         auto_detect_interface: tunnel.then_some(true),
         default_domain_resolver: Some(DomainResolver::Tag(DNS_LOCAL_TAG.into())),
@@ -175,6 +191,28 @@ mod tests {
     };
     use serde_json::{Value, json};
     use crate::profile::OpenVpnConfig;
+    use crate::routing::{Preset, Routing, Rule, RuleKind, Target};
+
+    fn rule(kind: RuleKind, values: &[&str], target: Target) -> Rule {
+        Rule { enabled: true, kind, values: values.iter().map(|v| v.to_string()).collect(), target }
+    }
+
+    /// Every rule kind and preset, for the generator and `sing-box check` tests.
+    fn full_routing() -> Routing {
+        Routing {
+            default: Target::Direct,
+            presets: Preset::ALL.to_vec(),
+            rules: vec![
+                rule(RuleKind::App, &["firefox", "/usr/bin/telegram-desktop"], Target::Proxy),
+                rule(RuleKind::Domain, &["example.ir"], Target::Proxy),
+                rule(RuleKind::Keyword, &["torrent"], Target::Block),
+                rule(RuleKind::Ip, &["10.8.0.0/16"], Target::Direct),
+                rule(RuleKind::Port, &["25", "6881:6889"], Target::Block),
+                rule(RuleKind::Geosite, &["category-ir"], Target::Direct),
+                Rule { enabled: false, ..rule(RuleKind::Domain, &["disabled.com"], Target::Block) },
+            ],
+        }
+    }
 
     fn vless_profile() -> Profile {
         Profile::Proxy {
@@ -307,6 +345,84 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn routing_rules_follow_lan_bypass_in_order() {
+        let settings = Settings { routing: full_routing(), ..Default::default() };
+        let config = build(&vless_profile(), &settings);
+        let route = &config["route"];
+        let rules = route["rules"].as_array().unwrap();
+
+        assert_eq!(route["final"], DIRECT_TAG);
+        // sniff, hijack-dns, LAN, then the custom rules (app splits in two), then presets.
+        assert_eq!(rules[3], json!({ "action": "route", "outbound": PROXY_TAG, "process_name": ["firefox"] }));
+        assert_eq!(rules[4], json!({ "action": "route", "outbound": PROXY_TAG, "process_path": ["/usr/bin/telegram-desktop"] }));
+        assert_eq!(rules[5], json!({ "action": "route", "outbound": PROXY_TAG, "domain_suffix": ["example.ir"] }));
+        assert_eq!(rules[6], json!({ "action": "reject", "domain_keyword": ["torrent"] }));
+        assert_eq!(rules[7], json!({ "action": "route", "outbound": DIRECT_TAG, "ip_cidr": ["10.8.0.0/16"] }));
+        assert_eq!(rules[8], json!({ "action": "reject", "port": [25], "port_range": ["6881:6889"] }));
+        assert_eq!(rules[10], json!({ "action": "reject", "rule_set": ["geosite-category-ads-all"] }));
+        assert!(!rules.iter().any(|r| r["domain_suffix"] == json!(["disabled.com"])));
+        // Tunnel mode sees IPs, so nothing is resolved up front.
+        assert!(!rules.iter().any(|r| r["action"] == "resolve"));
+
+        let rule_sets = route["rule_set"].as_array().unwrap();
+        let tags: Vec<&str> = rule_sets.iter().map(|r| r["tag"].as_str().unwrap()).collect();
+        assert_eq!(tags, [
+            "geosite-category-ir", "geosite-category-ads-all", "geoip-ir",
+            "geosite-cn", "geoip-cn", "geosite-category-ru", "geoip-ru",
+        ]);
+        assert_eq!(rule_sets[2], json!({
+            "type": "remote", "tag": "geoip-ir", "format": "binary",
+            "url": "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-ir.srs",
+            "download_detour": PROXY_TAG,
+        }));
+    }
+
+    #[test]
+    fn domain_rules_pick_the_dns_server() {
+        let settings = Settings { routing: full_routing(), ..Default::default() };
+        let config = build(&vless_profile(), &settings);
+        let dns_rules = config["dns"]["rules"].as_array().unwrap();
+
+        assert_eq!(dns_rules[0], json!({ "action": "route", "server": DNS_REMOTE_TAG, "domain_suffix": ["example.ir"] }));
+        assert_eq!(dns_rules[1], json!({ "action": "reject", "domain_keyword": ["torrent"] }));
+        assert_eq!(dns_rules[2], json!({ "action": "route", "server": DNS_LOCAL_TAG, "rule_set": ["geosite-category-ir"] }));
+        assert!(dns_rules.iter().all(|r| r.get("rule_set").is_none_or(|s| s[0].as_str().unwrap().starts_with("geosite-"))));
+        assert_eq!(config["dns"]["final"], DNS_REMOTE_TAG);
+    }
+
+    #[test]
+    fn proxy_modes_resolve_before_the_first_ip_rule() {
+        let settings = Settings { mode: ConnectionMode::ProxyOnly, routing: full_routing(), ..Default::default() };
+        let config = build(&vless_profile(), &settings);
+        let rules = config["route"]["rules"].as_array().unwrap();
+
+        let resolve = rules.iter().position(|r| r["action"] == "resolve").unwrap();
+        let first_ip = rules.iter().position(|r| r.get("ip_cidr").is_some()).unwrap();
+        assert_eq!(resolve + 1, first_ip);
+        assert_eq!(rules.iter().filter(|r| r["action"] == "resolve").count(), 1);
+
+        // No IP rules, nothing to resolve.
+        let domains_only = Routing { rules: vec![rule(RuleKind::Domain, &["a.com"], Target::Direct)], ..Default::default() };
+        let config = build(&vless_profile(), &Settings { mode: ConnectionMode::ProxyOnly, routing: domains_only, ..Default::default() });
+        assert!(!config["route"]["rules"].as_array().unwrap().iter().any(|r| r["action"] == "resolve"));
+    }
+
+    #[test]
+    fn no_routing_adds_nothing() {
+        let config = build(&vless_profile(), &Settings::default());
+        assert!(config["route"].get("rule_set").is_none());
+        assert!(config["dns"].get("rules").is_none());
+        assert_eq!(config["route"]["final"], PROXY_TAG);
+    }
+
+    #[test]
+    fn settings_without_routing_still_load() {
+        let settings: Settings = serde_json::from_str(r#"{ "mode": "proxy_only", "bypass_lan": false }"#).unwrap();
+        assert_eq!(settings.routing, Routing::default());
+        assert_eq!(settings.mode, ConnectionMode::ProxyOnly);
+    }
+
     /// Runs the real `sing-box check` on generated configs: `cargo test -- --ignored`
     #[test]
     #[ignore = "needs sing-box in PATH"]
@@ -318,13 +434,15 @@ mod tests {
         let modes = [ConnectionMode::Tunnel, ConnectionMode::SystemProxy, ConnectionMode::ProxyOnly];
         for (name, profile) in [("vless", vless_profile()), ("wireguard", wireguard_profile())] {
             for mode in modes {
-                let settings = Settings { mode, tunnel_proxy: true, ..Default::default() };
-                let config = build_config(&profile, &settings, &dir).unwrap();
-                let path = dir.join(format!("{name}-{mode:?}.json"));
-                std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+                for (variant, routing) in [("plain", Routing::default()), ("routed", full_routing())] {
+                    let settings = Settings { mode, tunnel_proxy: true, routing, ..Default::default() };
+                    let config = build_config(&profile, &settings, &dir).unwrap();
+                    let path = dir.join(format!("{name}-{mode:?}-{variant}.json"));
+                    std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 
-                if let Err(e) = crate::engine::singbox::check(&binary, &path) {
-                    panic!("{name} ({mode:?}) config rejected: {e}");
+                    if let Err(e) = crate::engine::singbox::check(&binary, &path) {
+                        panic!("{name} ({mode:?}, {variant}) config rejected: {e}");
+                    }
                 }
             }
         }

@@ -33,10 +33,12 @@ Use `Toggle` (buttons.slint) instead of the Fluent `Switch`.
 src/
   main.rs            mod decls + slint::include_modules!(); calls app::run()
   app.rs   (~1100 lines) UI glue: callbacks, threads, list refresh, connect/disconnect, settings, engines
-  app/screenshots.rs headless Slint platform driving the real UI in tests
+  app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots` never connects: safe)
   profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}},
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
-                     ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy)
+                     ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing)
+  routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
+                     Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
   store.rs           Store persisted as state.json (atomic write, 0600; corrupt → .bak): settings, manual entries,
                      subscriptions (with entries, usage, updated_at), selected id, next_id
   engine.rs          Engine trait (start/stop/status/ready), EngineKind, Status, EngineError, engine_for()
@@ -45,6 +47,7 @@ src/
   engine/paths.rs    data_dir(), bin_dir(), find_binary() (beside exe → <data>/bin → PATH), write_private()
   engine/singbox.rs  SingBoxEngine: generate → write sing-box.json → `sing-box check` → `run`; Windows proxy reset
   engine/singbox/generate.rs   build_config(profile, settings, data_dir) → SingBoxConfig (tags: proxy, direct, tun-in, mixed-in)
+  engine/singbox/generate/routing.rs  routing rules → route rules + remote geo rule sets (SagerNet .srs via proxy) + DNS rules
   engine/singbox/config/       serde model of sing-box config (inbound/, outbound/, endpoint, dns, route, shared/{tls,transport,dial,multiplex,hysteria}, tests.rs)
   engine/openvpn.rs  OpenVpnEngine: --cd/--config, Inline configs → temp <data>/openvpn.ovpn (0600, removed on stop), temp auth file for auth-user-pass, ready = "Initialization Sequence Completed", AUTH_FAILED detection
   engine/install.rs  engine detection/versions; downloads pinned sing-box release (SHA-256 verified, 200MB cap) into <data>/bin
@@ -74,6 +77,9 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - **Connect**: selected entry → (OpenVPN creds dialog if needed) → background thread stops old engine →
   `start_engine` polls status every 100ms: fail fast, 1.5s grace then `ready()`, 45s timeout, cancellable.
   `explain()` maps permission/not-found/port-in-use errors to user hints (pointing at Settings → Engines).
+- **Routing** (Settings → ROUTING): default route combo goes through `settings_changed`; presets/rules have
+  their own callbacks (`toggle_preset`, `edit_rule`/`save_rule` with the rule Sheet, `change_rules`) + `refresh_routing`.
+  Proxy modes get a `resolve` action before the first IP rule. Details in docs/singbox-config.md §6.1.
 - **Imports**: `import_files` by extension: `.ovpn`, `.conf` (WireGuard), else text of links. Links dialog → `parse_links`.
   Subscriptions update in place; selection follows the same server name.
 - **Latency test**: TCP connect (3s, 16 workers) to `Profile::tcp_endpoint()`; UDP protocols skipped.
@@ -94,13 +100,15 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Git repo since 2026-10-18 (branch `master`, no remote). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
-## Status & history (as of 2026-10-18)
+## Status & history (as of 2026-10-25)
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 50 tests passing at last count (ovpn:// links added 2026-10-18); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 61 tests passing at last count (routing added 2026-10-25); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
+- Split tunneling / routing rules (2026-10-25): generator + `sing-box check` pass, UI rendered headlessly. User must verify
+  real routing: app rules in Tunnel mode (process lookup as root), geo presets (rule-set download via proxy), whitelist default.
 - pkexec-per-connect (2026-10-18): user must confirm exactly 1 prompt per Tunnel connect, clean disconnect, OpenVPN tun0 creation.
   First OpenVPN test (ovpn:// link) got through TLS + PUSH_REPLY, then failed creating tun0 unprivileged; that's what this fixes.
 - OpenVPN pushed DNS: now root, so OpenVPN 2.7's own DNS handling may apply it; unverified.

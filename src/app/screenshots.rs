@@ -174,9 +174,9 @@ fn http_via_proxy(proxy_port: u16, target_port: u16) -> String {
     response
 }
 
-#[test]
-#[ignore = "visual check: CIPHER_SCREENSHOTS=<dir> cargo test screenshots -- --ignored"]
-fn screenshots() {
+/// Installs the headless platform (once per process) and starts the real app in it,
+/// with its data dir inside the output dir.
+fn start() -> (AppWindow, Ctx, Timer, Driver) {
     let out = PathBuf::from(std::env::var("CIPHER_SCREENSHOTS").expect("set CIPHER_SCREENSHOTS to an output dir"));
     std::fs::create_dir_all(&out).unwrap();
     // Keep the real data dir untouched.
@@ -191,13 +191,73 @@ fn screenshots() {
 
     let ui = AppWindow::new().unwrap();
     ui.show().unwrap();
-    let (_ctx, _monitor) = init(&ui);
+    let (ctx, monitor) = init(&ui);
     let d = Driver {
         window,
         queue,
         out,
         frame: RefCell::new(vec![PremultipliedRgbaColor::default(); (WIDTH * HEIGHT) as usize]),
     };
+    (ui, ctx, monitor, d)
+}
+
+/// The routing editor in Settings. Never connects, so it's safe to run anywhere:
+/// `CIPHER_SCREENSHOTS=<dir> cargo test routing_screenshots -- --ignored`
+#[test]
+#[ignore = "visual check: CIPHER_SCREENSHOTS=<dir> cargo test routing_screenshots -- --ignored"]
+fn routing_screenshots() {
+    let (ui, _ctx, _monitor, d) = start();
+    let state = ui.global::<AppState>();
+    state.set_current_tab(2);
+    d.shot("r01-settings");
+
+    // Add a rule through the editor.
+    state.invoke_edit_rule(-1);
+    d.shot("r02-rule-dialog-empty");
+    state.set_rule_dialog_kind(4); // App
+    state.set_rule_dialog_target(0); // Proxy
+    state.set_rule_dialog_values("firefox\n/usr/bin/telegram-desktop\nchrome.exe".into());
+    d.shot("r03-rule-dialog-app");
+    state.invoke_save_rule();
+    d.shot("r04-rule-added");
+
+    // An invalid value keeps the dialog open with an error.
+    state.invoke_edit_rule(-1);
+    state.set_rule_dialog_kind(2); // IP
+    state.set_rule_dialog_values("10.0.0.0/8, not-an-ip".into());
+    state.invoke_save_rule();
+    d.pump(300); // sheet slide-in
+    d.shot("r05-rule-dialog-error");
+    assert!(state.get_rule_dialog_open());
+    state.set_rule_dialog_values("10.0.0.0/8, 192.168.1.10".into());
+    state.set_rule_dialog_target(1); // Direct
+    state.invoke_save_rule();
+
+    state.invoke_edit_rule(-1);
+    state.set_rule_dialog_kind(0);
+    state.set_rule_dialog_target(2); // Block
+    state.set_rule_dialog_values("doubleclick.net".into());
+    state.invoke_save_rule();
+    state.invoke_toggle_preset(0);
+    state.invoke_toggle_preset(3);
+    state.invoke_toggle_rule(2);
+    state.invoke_move_rule(1, -1);
+    d.pump(300); // sheet slide-out
+    d.shot("r06-rules-and-presets");
+    assert_eq!(state.get_rules().row_count(), 3);
+    assert_eq!(state.get_rules().row_data(0).unwrap().kind, "IP");
+
+    // Scrolled down to the rule list.
+    d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: -300.0 });
+    d.shot("r07-rules-scrolled");
+    d.hover(600.0, 330.0);
+    d.shot("r08-rule-hover");
+}
+
+#[test]
+#[ignore = "visual check: CIPHER_SCREENSHOTS=<dir> cargo test screenshots -- --ignored"]
+fn screenshots() {
+    let (ui, _ctx, _monitor, d) = start();
 
     // The local server doubles as a reachable "proxy server" for the latency test.
     let uuid = "bf000d23-0752-40b4-affe-68f7707a9661";

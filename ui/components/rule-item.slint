@@ -1,0 +1,111 @@
+import { Theme } from "../theme.slint";
+import { RuleData } from "../state.slint";
+import { IconButton, Toggle } from "buttons.slint";
+
+component Tag inherits Rectangle {
+    in property <string> text;
+    in property <color> tint: Theme.text-muted;
+
+    width: label.preferred-width + 10px;
+    height: 18px;
+    border-radius: 5px;
+    background: root.tint.transparentize(85%);
+    border-width: 1px;
+    border-color: root.tint.transparentize(70%);
+
+    label := Text {
+        text: root.text;
+        color: root.tint;
+        font-size: 10px;
+        font-weight: 700;
+    }
+}
+
+// One custom routing rule: on/off, what it matches, where it goes. Click to edit.
+export component RuleItem inherits Rectangle {
+    in property <RuleData> data;
+    in property <bool> first;
+    in property <bool> last;
+
+    callback toggled();
+    callback edit();
+    callback move(int);
+    callback remove();
+
+    height: 40px;
+    border-radius: 10px;
+    background: touch.has-hover ? Theme.surface-raised : Theme.background;
+    border-width: 1px;
+    border-color: touch.has-hover ? Theme.border-strong : Theme.border;
+    opacity: data.enabled ? 1 : 0.55;
+    animate background, border-color { duration: 100ms; }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.edit(); }
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 6px;
+        spacing: 8px;
+
+        VerticalLayout {
+            alignment: center;
+            Toggle {
+                checked: data.enabled;
+                toggled => { root.toggled(); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Tag { text: data.kind; }
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: data.summary;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Tag {
+                text: data.target;
+                tint: Theme.target-color(data.target);
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+
+            HorizontalLayout {
+                spacing: 0px;
+
+                IconButton {
+                    icon: @image-url("../../assets/icons/MdiArrowUp.svg");
+                    size: 14px;
+                    enabled: !root.first;
+                    clicked => { root.move(-1); }
+                }
+
+                IconButton {
+                    icon: @image-url("../../assets/icons/MdiArrowDown.svg");
+                    size: 14px;
+                    enabled: !root.last;
+                    clicked => { root.move(1); }
+                }
+
+                IconButton {
+                    icon: @image-url("../../assets/icons/MdiDelete.svg");
+                    size: 14px;
+                    hover-color: Theme.danger;
+                    clicked => { root.remove(); }
+                }
+            }
+        }
+    }
+}
