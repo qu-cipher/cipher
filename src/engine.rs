@@ -7,6 +7,7 @@ pub mod process;
 pub mod singbox;
 pub mod openvpn;
 pub mod psiphon;
+pub mod xray;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
@@ -14,6 +15,8 @@ pub enum EngineKind {
     OpenVpn,
     /// Psiphon's client, chained behind sing-box.
     Psiphon,
+    /// Xray-core, chained behind sing-box.
+    Xray,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +82,7 @@ pub trait Engine {
 impl EngineKind {
     /// Whether sing-box serves the connection (and with it the local proxy and routing rules).
     pub fn runs_singbox(self) -> bool {
-        matches!(self, EngineKind::SingBox | EngineKind::Psiphon)
+        matches!(self, EngineKind::SingBox | EngineKind::Psiphon | EngineKind::Xray)
     }
 }
 
@@ -88,5 +91,6 @@ pub fn engine_for(kind: EngineKind) -> Box<dyn Engine + Send> {
         EngineKind::SingBox => Box::new(singbox::SingBoxEngine::default()),
         EngineKind::OpenVpn => Box::new(openvpn::OpenVpnEngine::default()),
         EngineKind::Psiphon => Box::new(psiphon::PsiphonEngine::default()),
+        EngineKind::Xray => Box::new(xray::XrayEngine::default()),
     }
 }

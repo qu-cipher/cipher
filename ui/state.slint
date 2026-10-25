@@ -135,6 +135,13 @@ export global AppState {
     in property <string> openvpn-status;
     // downloading sing-box
     in property <bool> engine-busy;
+    in property <string> xray-status;
+    in property <bool> xray-installed;
+    // downloading Xray
+    in property <bool> xray-busy;
+    // Engine for VLESS/VMess/Trojan/Shadowsocks configs both can run; same order as `CORES` in Rust.
+    out property <[string]> cores: ["sing-box", "Xray"];
+    in-out property <int> core;
     // Psiphon is switched off in Rust (`psiphon::ENABLED`): hides its engine row and settings.
     in property <bool> psiphon-enabled;
     in property <string> psiphon-status;
@@ -181,6 +188,7 @@ export global AppState {
     // index, then -1 (up) or 1 (down)
     callback move-rule(int, int);
     callback install-singbox();
+    callback install-xray();
     callback install-psiphon();
     // file dialog for a Psiphon JSON client config
     callback import-psiphon-network();

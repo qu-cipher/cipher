@@ -64,8 +64,11 @@ fn vless_ws_tls_with_early_data() {
 
 #[test]
 fn vless_rejects_unsupported() {
-    let xhttp = format!("vless://{UUID}@x.com:443?type=xhttp");
-    assert!(matches!(parse_link(&xhttp), Err(ImportError::Unsupported(_))));
+    // XHTTP goes to Xray now; transports neither engine has are still rejected.
+    let xhttp = format!("vless://{UUID}@x.com:443?type=xhttp&security=tls");
+    assert!(matches!(parse_link(&xhttp), Ok(Profile::Xray { .. })));
+    let unknown = format!("vless://{UUID}@x.com:443?type=meek");
+    assert!(matches!(parse_link(&unknown), Err(ImportError::Unsupported(_))));
 
     let reality_without_key = format!("vless://{UUID}@x.com:443?security=reality");
     assert!(matches!(parse_link(&reality_without_key), Err(ImportError::Missing(_))));

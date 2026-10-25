@@ -4,7 +4,7 @@
 //! connecting, latency tests, file dialogs) runs on background threads, which post their
 //! results back to the UI thread with `upgrade_in_event_loop`.
 
-use crate::engine::{self, Engine, Status, install, openvpn, paths, process, psiphon, singbox};
+use crate::engine::{self, Engine, EngineError, Status, install, openvpn, paths, process, psiphon, singbox, xray};
 use crate::engine::singbox::config::log::LogLevel;
 use crate::import::{self, ImportError};
 use crate::engine::singbox::generate::PROXY_LISTEN;
@@ -33,6 +33,8 @@ const MODES: [ConnectionMode; 3] = [ConnectionMode::Tunnel, ConnectionMode::Syst
 /// Same order as `route-defaults` / `rule-targets` in the UI.
 const ROUTE_DEFAULTS: [Target; 2] = [Target::Proxy, Target::Direct];
 const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
+/// Same order as `cores` in the UI.
+const CORES: [xray::Core; 2] = [xray::Core::SingBox, xray::Core::Xray];
 /// Order of the groups in the grouped Configs list (`Profile::group`).
 const GROUP_ORDER: [&str; 15] = [
     "Built-In", "VLESS", "VMess", "Trojan", "Shadowsocks", "Hysteria2", "TUIC", "AnyTLS", "WireGuard", "OpenVPN",
@@ -227,8 +229,13 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
             rules.swap(index as usize, to as usize);
         }
     }));
-    on!(ui, ctx, on_install_singbox, |ui, ctx| install_singbox(&ui, ctx));
-    on!(ui, ctx, on_install_psiphon, |ui, ctx| install_psiphon(&ui, ctx));
+    on!(ui, ctx, on_install_singbox, |ui, ctx| {
+        install_engine(&ui, ctx, "sing-box", |state: &AppState, busy| state.set_engine_busy(busy), install::install_singbox)
+    });
+    on!(ui, ctx, on_install_xray, |ui, ctx| install_engine(&ui, ctx, "Xray", |state: &AppState, busy| state.set_xray_busy(busy), install::install_xray));
+    on!(ui, ctx, on_install_psiphon, |ui, ctx| {
+        install_engine(&ui, ctx, "Psiphon", |state: &AppState, busy| state.set_psiphon_busy(busy), install::install_psiphon)
+    });
     on!(ui, ctx, on_import_psiphon_network, |ui, ctx| import_psiphon_network(&ui, ctx));
     on!(ui, ctx, on_open_data_dir, |ui, ctx| {
         if let Err(e) = paths::data_dir().and_then(|dir| open_external(&dir).map_err(Into::into)) {
@@ -873,6 +880,8 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
         ask_credentials(ui, ctx, id, true, "");
         return;
     }
+    // With the Xray core, configs Xray can run go to Xray.
+    let profile = xray::effective(&profile, &settings).into_owned();
 
     ctx.cancel.store(false, Ordering::Relaxed);
     ui.global::<AppState>().set_error(SharedString::new());
@@ -959,6 +968,8 @@ fn explain(reason: String) -> String {
         "Tunnel mode asks for the admin password through pkexec (polkit), which isn't installed.".into()
     } else if lower.contains("`sing-box") && lower.contains("not found") {
         "sing-box isn't installed yet: download it in Settings → Engines.".into()
+    } else if lower.contains(&format!("`{}", xray::BINARY)) && lower.contains("not found") {
+        "Xray isn't installed yet: download it in Settings → Engines.".into()
     } else if lower.contains(&format!("`{}", psiphon::BINARY)) && lower.contains("not found") {
         "Psiphon isn't installed yet: download it in Settings → Engines.".into()
     } else if lower.contains("`openvpn") && lower.contains("not found") {
@@ -1032,6 +1043,7 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_proxy_port(settings.proxy_port.to_string().into());
     state.set_tunnel_proxy(settings.tunnel_proxy);
     state.set_group_configs(settings.group_configs);
+    state.set_core(CORES.iter().position(|c| *c == settings.core).unwrap_or(0) as i32);
     state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
     let regions: Vec<SharedString> = psiphon::REGIONS
         .iter()
@@ -1069,6 +1081,7 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         proxy_port: state.get_proxy_port().trim().parse().ok().filter(|&p| p > 0).unwrap_or(store.settings.proxy_port),
         tunnel_proxy: state.get_tunnel_proxy(),
         group_configs: state.get_group_configs(),
+        core: CORES.get(state.get_core() as usize).copied().unwrap_or_default(),
         // Rules and presets are edited through their own callbacks.
         routing: Routing {
             default: ROUTE_DEFAULTS.get(state.get_route_default() as usize).copied().unwrap_or_default(),
@@ -1190,6 +1203,7 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
         let singbox = install::installed("sing-box");
         let openvpn = install::installed("openvpn");
         let psiphon = psiphon::ENABLED.then(|| install::installed(psiphon::BINARY)).flatten();
+        let xray = install::installed(xray::BINARY);
 
         let usable = singbox.as_ref().is_some_and(|info| version_at_least(&info.version, singbox::MIN_VERSION));
         let singbox_status = match &singbox {
@@ -1202,6 +1216,11 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
             None if cfg!(windows) => "Not installed. Get it from openvpn.net to use .ovpn configs.".into(),
             None => "Not installed. Install it with your package manager to use .ovpn configs.".into(),
         };
+        let xray_installed = xray.is_some();
+        let xray_status = match &xray {
+            Some(info) => format!("{} · {}", info.version, info.path.display()),
+            None => "Not installed. Needed for XHTTP, mKCP and VLESS encryption, and for the Xray core.".into(),
+        };
         let psiphon_installed = psiphon.is_some();
         let psiphon_status = match &psiphon {
             Some(info) => format!("{} · {}", info.version, info.path.display()),
@@ -1213,43 +1232,33 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
             state.set_singbox_installed(usable);
             state.set_singbox_status(singbox_status.into());
             state.set_openvpn_status(openvpn_status.into());
+            state.set_xray_installed(xray_installed);
+            state.set_xray_status(xray_status.into());
             state.set_psiphon_installed(psiphon_installed);
             state.set_psiphon_status(psiphon_status.into());
         });
     });
 }
 
-fn install_singbox(ui: &AppWindow, ctx: &Ctx) {
+/// Downloads an engine in the background, with its Download button showing progress.
+fn install_engine(
+    ui: &AppWindow,
+    ctx: &Ctx,
+    name: &'static str,
+    set_busy: fn(&AppState, bool),
+    install: fn(&Path) -> Result<install::EngineInfo, EngineError>,
+) {
     let Ok(data_dir) = paths::data_dir() else { return };
-    ui.global::<AppState>().set_engine_busy(true);
+    set_busy(&ui.global::<AppState>(), true);
 
     let weak = ui.as_weak();
     let ctx = ctx.clone();
     thread::spawn(move || {
-        let result = install::install_singbox(&data_dir);
+        let result = install(&data_dir);
         on_ui(&weak, &ctx, move |ui, ctx| {
-            ui.global::<AppState>().set_engine_busy(false);
+            set_busy(&ui.global::<AppState>(), false);
             match result {
-                Ok(info) => notify(ui, ctx, format!("Installed sing-box {}", info.version), false),
-                Err(e) => notify(ui, ctx, e.to_string(), true),
-            }
-            refresh_engines(ui, ctx);
-        });
-    });
-}
-
-fn install_psiphon(ui: &AppWindow, ctx: &Ctx) {
-    let Ok(data_dir) = paths::data_dir() else { return };
-    ui.global::<AppState>().set_psiphon_busy(true);
-
-    let weak = ui.as_weak();
-    let ctx = ctx.clone();
-    thread::spawn(move || {
-        let result = install::install_psiphon(&data_dir);
-        on_ui(&weak, &ctx, move |ui, ctx| {
-            ui.global::<AppState>().set_psiphon_busy(false);
-            match result {
-                Ok(info) => notify(ui, ctx, format!("Installed Psiphon ({})", info.version), false),
+                Ok(info) => notify(ui, ctx, format!("Installed {name} {}", info.version), false),
                 Err(e) => notify(ui, ctx, e.to_string(), true),
             }
             refresh_engines(ui, ctx);

@@ -6,6 +6,7 @@ pub mod uri;
 pub mod link;
 pub mod wireguard;
 pub mod openvpn;
+pub mod xray;
 pub mod subscription;
 pub mod singbox_json;
 

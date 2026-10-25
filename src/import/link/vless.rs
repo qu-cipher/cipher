@@ -2,15 +2,20 @@ use crate::engine::singbox::{
     config::outbound::{Outbound, vless::{VlessFlow, VlessOutbound}},
     generate::PROXY_TAG,
 };
-use crate::import::{ImportError, link, uri::ShareLink};
+use crate::import::{ImportError, link, uri::ShareLink, xray};
 use crate::profile::Profile;
 
 /// `vless://uuid@host:port?security=reality&pbk=…&type=ws&…#name`
 pub fn parse(link: &ShareLink) -> Result<Profile, ImportError> {
     let uuid = link.userinfo.clone().filter(|u| !u.is_empty()).ok_or(ImportError::Missing("uuid"))?;
 
-    if let Some(encryption) = link.get("encryption") && encryption != "none" {
-        return Err(ImportError::Unsupported("VLESS encryption".into()));
+    if xray::needed(&link.query) {
+        let credentials = xray::Credentials::Vless {
+            id: uuid,
+            encryption: link.get("encryption").unwrap_or("none").into(),
+            flow: link.get("flow").map(Into::into),
+        };
+        return xray::profile(link.display_name(), credentials, &link.host, link.port()?, &link.query);
     }
 
     let flow = match link.get("flow") {

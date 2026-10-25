@@ -3,6 +3,7 @@
 Desktop VPN client (Linux + Windows) written in Rust with a **Slint** UI. It doesn't implement
 protocols itself: it imports configs, then drives external engines as child processes:
 - **sing-box** (≥ 1.12, pinned/tested 1.14.3) for proxy protocols and WireGuard
+- **xray** (Xray-core ≥ 26, pinned 26.10.21) for XHTTP/mKCP/VLESS-encryption links and the optional Xray core, chained behind sing-box
 - **openvpn** binary for `.ovpn` files (Tunnel mode only)
 - **psiphon-tunnel-core** (Psiphon ConsoleClient) for the built-in "Psiphon Tunnel" entry, chained behind sing-box.
   **Disabled** via `engine::psiphon::ENABLED = false` (hides the entry, engine row and settings; code kept)
@@ -16,7 +17,7 @@ privileges). Read that before touching config generation instead of re-deriving 
 ```sh
 cargo build / cargo run
 cargo test                    # unit tests, fixture round-trips, generator assertions
-cargo test -- --ignored       # also real `sing-box check`, real release download, screenshots
+cargo test -- --ignored       # also real `sing-box check` + `xray run -test` (XRAY_BINARY=~/Apps/v2rayN/bin/xray/xray), release download, screenshots
 CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture   # headless UI frames (*.rgba 820x520)
 ```
 **Releases:** `.github/workflows/release.yml`, on a `v*` tag (must equal the Cargo.toml version) or manual run.
@@ -40,10 +41,11 @@ src/
   app.rs   (~1100 lines) UI glue: callbacks, threads, list refresh, connect/disconnect, settings, engines
   app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, Psiphon, grouped
                      Configs list; never connects: safe)
-  profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name}},
+  profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name}, Xray{name, outbound: XrayOutbound}},
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
                      ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing,
-                     psiphon: PsiphonSettings {network: imported JSON map, region}, group_configs=true);
+                     psiphon: PsiphonSettings {network: imported JSON map, region},
+                     core: xray::Core {SingBox(default), Xray}, group_configs=true);
                      Profile::group() = group label in the Configs list ("VLESS", …, "Built-In" for Psiphon)
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
                      Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
@@ -58,10 +60,15 @@ src/
   engine/singbox/generate.rs   build_config(profile, settings, data_dir, direct_processes) → SingBoxConfig (tags: proxy, direct, tun-in, mixed-in)
   engine/singbox/generate/routing.rs  routing rules → route rules + remote geo rule sets (SagerNet .srs via proxy) + DNS rules
   engine/singbox/config/       serde model of sing-box config (inbound/, outbound/, endpoint, dns, route, shared/{tls,transport,dial,multiplex,hysteria}, tests.rs)
+  engine/chain.rs    Chain: upstream process with a local SOCKS port + inner SingBoxEngine (socks outbound, process_name→direct),
+                     started once `upstream_up`; shared by Xray and Psiphon
+  engine/xray.rs     XrayEngine (xray.json → `xray run -test` → `xray run`; up = SOCKS port open), Core, effective() (core setting)
+  engine/xray/config.rs   serde model of an Xray outbound (vless/vmess/trojan/shadowsocks + streamSettings)
+  engine/xray/convert.rs  sing-box Outbound → XrayOutbound for the Xray core (None = stays on sing-box)
   engine/psiphon.rs  PsiphonEngine: psiphon-tunnel-core (as user, JSON notices → psiphon.log) then, once a `Tunnels` notice
                      count ≥ 1, an inner SingBoxEngine with a socks outbound to it + process_name→direct rule; REGIONS
   engine/openvpn.rs  OpenVpnEngine: --cd/--config, Inline configs → temp <data>/openvpn.ovpn (0600, removed on stop), temp auth file for auth-user-pass, ready = "Initialization Sequence Completed", AUTH_FAILED detection
-  engine/install.rs  engine detection/versions; downloads pinned sing-box release and pinned Psiphon binary
+  engine/install.rs  engine detection/versions; downloads pinned sing-box + Xray (XRAY_VERSION zip, `zip` crate) releases and pinned Psiphon binary
                      (psiphon-tunnel-core-binaries @ PSIPHON_COMMIT; SHA-256 verified) into <data>/bin
   import.rs          ImportError, decode_base64 (all variants), re-exports
   import/link.rs + link/*.rs   share links: vless, vmess, trojan, ss, hysteria2/hy2, tuic, anytls, wireguard/wg (tests in link/tests.rs);
@@ -71,6 +78,7 @@ src/
   import/singbox_json.rs  sing-box JSON → profiles (skips direct/block/dns/selector/urltest)
   import/wireguard.rs     .conf → WireGuard endpoint
   import/openvpn.rs       .ovpn file / ovpn:// link → Profile::OpenVpn, needs_credentials()
+  import/xray.rs          links needing Xray (xhttp/splithttp/kcp/mkcp, VLESS encryption) → Profile::Xray; hooked in vless/vmess/trojan
 ui/
   state.slint        AppState global: ALL Rust↔UI properties & callbacks (structs ConfigData, SubscriptionData, enum ConnectionState)
   main-window.slint  AppWindow (820x520, frameless): TitleBar, ConnectPanel | LibraryPanel, Sheets (subscription / links / OpenVPN creds dialogs)
@@ -101,7 +109,7 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   `state.slint` + handler in `app.rs` `bind_callbacks`.
 - **Runtime files** (`~/.local/share/cipher_client`, Windows `%APPDATA%\cipher_client`): state.json,
   sing-box.json, sing-box.log, cache.db, openvpn.log, openvpn.ovpn + openvpn-auth.txt (temporary),
-  psiphon.json, psiphon.log, psiphon/ (its datastore), bin/.
+  xray.json, xray.log, psiphon.json, psiphon.log, psiphon/ (its datastore), bin/.
 
 ## Key decisions / gotchas
 - TUN uses `stack: gvisor` (the default mixed stack broke TCP behind UFW). `strict_route`, `auto_route` on.
@@ -118,10 +126,12 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 ## Status & history (as of 2026-10-26)
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 69 tests passing at last count (sing-box version parsing fix 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 80 tests passing at last count (Xray core added 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
+- Xray (2026-10-26): link parsing, converter and 10 config shapes pass the real `xray run -test` (v2rayN's 26.9.9);
+  chained sing-box config passes `sing-box check`. Real connections (XHTTP etc.) are for the user to verify.
 - Psiphon (2026-10-26): DISABLED (`psiphon::ENABLED = false`). Researched: Psiphon publishes no public-network config;
   integrators request one from the Psiphon team (Outline SDK docs: "Contact the Psiphon team… This may require a
   contract"). The README "Generate configuration data" flow is only for self-hosted psiphond; the user wants public
@@ -135,8 +145,8 @@ Pending / unverified:
 - Windows: builds and passes `cargo test` in CI (v0.2.0 release, MSVC), but has never been run on a real Windows machine.
   Local cross-check (`--target x86_64-pc-windows-gnu`) still fails in `ring` without MinGW.
 
-Known unsupported (rejected on import with a clear reason): Xray-only XHTTP/SplitHTTP, mKCP, VLESS
-`encryption` (XHTTP is common for the user, so this matters), AmneziaWG, ShadowTLS links, Clash YAML subscriptions.
+Known unsupported (rejected on import with a clear reason): AmneziaWG, ShadowTLS links, Clash YAML subscriptions.
+Xray 26 limits (checked with `xray run -test`): no `allowInsecure`, no plain VLESS/Trojan to public addresses, no h2/QUIC.
 Modeled but unused: `selector`/`urltest` outbounds, `clash_api` (planned for latency tests / server switching).
 
 Environment: CachyOS (Arch), fish shell, UFW enabled, system sing-box at `/usr/bin/sing-box`; v2rayN is also installed

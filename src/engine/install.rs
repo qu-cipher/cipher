@@ -2,6 +2,7 @@
 //!
 //! sing-box is downloaded from the official GitHub release, pinned to the version the generated
 //! configs are tested against, and checked against the release's SHA-256 before it is used.
+//! Xray comes from its official GitHub release the same way (a zip, unpacked with the `zip` crate).
 //! Psiphon has no release binaries: its ConsoleClient builds live in the
 //! `psiphon-tunnel-core-binaries` repo, pinned here to a commit and checked the same way.
 
@@ -24,6 +25,16 @@ const SINGBOX_ASSETS: [(&str, &str); 4] = [
     ("windows-arm64.zip", "195b35424c6e3f5913954c7f08c5d8ba2d2199f6d18eb27a3972a5a29cdaa78c"),
 ];
 const DOWNLOAD_LIMIT: u64 = 200 * 1024 * 1024;
+
+pub const XRAY_VERSION: &str = "26.10.21";
+
+/// Official Xray release zips: (file name, SHA-256 from GitHub's asset digests).
+const XRAY_ASSETS: [(&str, &str); 4] = [
+    ("Xray-linux-64.zip", "0eec3ed4163c273d8c8bf821f7d219e257921cf584aa3fb970715e458e631978"),
+    ("Xray-linux-arm64-v8a.zip", "d1304946c486d98e6b886e9b931eaaaebb23835b30e217638037b7f2721d4e9c"),
+    ("Xray-windows-64.zip", "fc58c39ee2f2717b4c54d28d374362389e5319b20ae44aea76ea45a5243ec827"),
+    ("Xray-windows-arm64-v8a.zip", "bb44af3380c9975f951ce7645c04d56ab600040e68f23974a2806e08e0a3f872"),
+];
 
 /// Commit of Psiphon-Labs/psiphon-tunnel-core-binaries (2026-10-05, ConsoleClient rev c4a09096ab).
 pub const PSIPHON_COMMIT: &str = "33ff79e89260f3adf92e846b96b3369b86a819d8";
@@ -98,6 +109,56 @@ pub fn install_singbox(data_dir: &Path) -> Result<EngineInfo, EngineError> {
     result?;
 
     installed("sing-box").ok_or_else(|| EngineError::Install("sing-box was installed but doesn't run".into()))
+}
+
+/// The Xray release zip for this OS/CPU: (file name, SHA-256).
+fn xray_asset() -> Option<(&'static str, &'static str)> {
+    let name = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "Xray-linux-64.zip",
+        ("linux", "aarch64") => "Xray-linux-arm64-v8a.zip",
+        ("windows", "x86_64") => "Xray-windows-64.zip",
+        ("windows", "aarch64") => "Xray-windows-arm64-v8a.zip",
+        _ => return None,
+    };
+    XRAY_ASSETS.into_iter().find(|(n, _)| *n == name)
+}
+
+/// Downloads, verifies and installs Xray into `<data>/bin`. Blocking.
+/// Only the executable is kept: the configs don't use Xray's geo files.
+pub fn install_xray(data_dir: &Path) -> Result<EngineInfo, EngineError> {
+    let (file_name, sha256) = xray_asset()
+        .ok_or_else(|| EngineError::Install("there is no Xray build for this platform".into()))?;
+    let url = format!("https://github.com/XTLS/Xray-core/releases/download/v{XRAY_VERSION}/{file_name}");
+
+    let archive = data_dir.join(file_name);
+    let result = download(&url, &archive)
+        .and_then(|()| verify_sha256(&archive, sha256))
+        .and_then(|()| extract_xray(&archive, data_dir));
+    let _ = fs::remove_file(&archive);
+    result?;
+
+    installed(crate::engine::xray::BINARY).ok_or_else(|| EngineError::Install("Xray was installed but doesn't run".into()))
+}
+
+fn extract_xray(archive: &Path, data_dir: &Path) -> Result<(), EngineError> {
+    let exe = format!("{}{}", crate::engine::xray::BINARY, std::env::consts::EXE_SUFFIX);
+    let invalid = |e: zip::result::ZipError| EngineError::Install(format!("couldn't unpack the download: {e}"));
+
+    let mut zip = zip::ZipArchive::new(File::open(archive)?).map_err(invalid)?;
+    let mut entry = zip.by_name(&exe).map_err(invalid)?;
+
+    let bin = paths::bin_dir(data_dir);
+    fs::create_dir_all(&bin)?;
+    let target = bin.join(&exe);
+    let partial = target.with_extension("download");
+    let result = (|| {
+        std::io::copy(&mut entry, &mut File::create(&partial)?)?;
+        make_executable(&partial)?;
+        let _ = fs::remove_file(&target);
+        fs::rename(&partial, &target)
+    })();
+    let _ = fs::remove_file(&partial);
+    Ok(result?)
 }
 
 /// Downloads, verifies and installs Psiphon's ConsoleClient into `<data>/bin`. Blocking.
@@ -261,13 +322,40 @@ mod tests {
         assert_eq!(parse_version("openvpn", "OpenVPN 2.7.8 x86_64-pc-linux-gnu [SSL (OpenSSL)]\n").unwrap(), "2.7.8");
         let psiphon = "Psiphon Console Client\n  Build Date: 2026-10-05\n  Built With: go1.24\n  Repository: github.com/Psiphon-Labs/psiphon-tunnel-core\n  Revision: c4a09096ab\n";
         assert_eq!(parse_version(crate::engine::psiphon::BINARY, psiphon).unwrap(), "rev c4a09096ab");
+        let xray = "Xray 26.9.9 (Xray, Penetrates Everything.) 52a412d (go1.27.1 linux/amd64)\nA unified platform for anti-censorship.\n";
+        assert_eq!(parse_version("xray", xray).unwrap(), "26.9.9");
         assert_eq!(parse_version("sing-box", ""), None);
+    }
+
+    #[test]
+    fn extracts_xray_from_a_release_zip() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("cipher_client_xray_zip_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let archive = dir.join("Xray.zip");
+        let exe = format!("xray{}", std::env::consts::EXE_SUFFIX);
+        {
+            let mut zip = zip::ZipWriter::new(File::create(&archive).unwrap());
+            let options = zip::write::SimpleFileOptions::default();
+            for (name, body) in [(exe.as_str(), "binary"), ("geoip.dat", "geo"), ("LICENSE", "text")] {
+                zip.start_file(name, options).unwrap();
+                zip.write_all(body.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+
+        extract_xray(&archive, &dir).unwrap();
+        assert_eq!(fs::read_to_string(paths::bin_dir(&dir).join(&exe)).unwrap(), "binary");
+        assert!(!paths::bin_dir(&dir).join("geoip.dat").exists());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn this_platform_has_a_pinned_release() {
         assert!(platform_asset().is_some());
+        assert!(xray_asset().is_some());
     }
 
     /// Downloads the real release from GitHub (about 30 MB) into a temp dir and verifies it.

@@ -4,6 +4,10 @@ use crate::engine::singbox::config::{
     log::LogLevel,
     outbound::Outbound,
 };
+use crate::engine::xray::{
+    Core,
+    config::{Network as XrayNetwork, Protocol as XrayProtocol, XrayOutbound},
+};
 use crate::routing::Routing;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -27,6 +31,8 @@ pub enum Profile {
     },
     /// The built-in Psiphon entry: Psiphon's client finds its own servers, sing-box sits in front.
     Psiphon { name: String },
+    /// A config only Xray can run (XHTTP, mKCP, VLESS encryption), with sing-box in front.
+    Xray { name: String, outbound: XrayOutbound },
 }
 
 /// Where an OpenVPN profile's config lives.
@@ -61,7 +67,8 @@ impl Profile {
             Profile::Proxy { name, .. }
             | Profile::WireGuard { name, .. }
             | Profile::OpenVpn { name, .. }
-            | Profile::Psiphon { name } => name,
+            | Profile::Psiphon { name }
+            | Profile::Xray { name, .. } => name,
         }
     }
 
@@ -85,6 +92,13 @@ impl Profile {
             Profile::WireGuard { .. } => "wg",
             Profile::OpenVpn { .. } => "ovpn",
             Profile::Psiphon { .. } => "psiphon",
+            Profile::Xray { outbound, .. } => match outbound.protocol {
+                XrayProtocol::Vless(_) => "vless",
+                XrayProtocol::Vmess(_) => "vmess",
+                XrayProtocol::Trojan(_) => "trojan",
+                XrayProtocol::Shadowsocks(_) => "ss",
+                XrayProtocol::Freedom(_) => "direct",
+            },
         }
     }
 
@@ -108,12 +122,23 @@ impl Profile {
             Profile::WireGuard { .. } => "WireGuard",
             Profile::OpenVpn { .. } => "OpenVPN",
             Profile::Psiphon { .. } => "Built-In",
+            Profile::Xray { outbound, .. } => match outbound.protocol {
+                XrayProtocol::Vless(_) => "VLESS",
+                XrayProtocol::Vmess(_) => "VMess",
+                XrayProtocol::Trojan(_) => "Trojan",
+                XrayProtocol::Shadowsocks(_) => "Shadowsocks",
+                XrayProtocol::Freedom(_) => "Direct",
+            },
         }
     }
 
     /// Server address for a TCP latency test. `None` for UDP-only protocols,
     /// where a TCP connect says nothing about reachability.
     pub fn tcp_endpoint(&self) -> Option<(String, u16)> {
+        if let Profile::Xray { outbound, .. } = self {
+            let (server, port) = outbound.server().filter(|_| outbound.network() != XrayNetwork::Kcp)?;
+            return Some((server.into(), port));
+        }
         let Profile::Proxy { outbound, .. } = self else { return None };
         let (server, port) = match outbound {
             Outbound::Socks(o) => (&o.server, o.server_port),
@@ -133,6 +158,7 @@ impl Profile {
             Profile::Proxy { .. } | Profile::WireGuard { .. } => EngineKind::SingBox,
             Profile::OpenVpn { .. } => EngineKind::OpenVpn,
             Profile::Psiphon { .. } => EngineKind::Psiphon,
+            Profile::Xray { .. } => EngineKind::Xray,
         }
     }
 }
@@ -175,6 +201,8 @@ pub struct Settings {
     /// Split tunneling: routing rules, presets and the default route (sing-box only).
     pub routing: Routing,
     pub psiphon: PsiphonSettings,
+    /// Which engine runs VLESS/VMess/Trojan/Shadowsocks configs both engines can run.
+    pub core: Core,
     /// Group the Configs list by protocol.
     pub group_configs: bool,
 }
@@ -208,6 +236,7 @@ impl Default for Settings {
             tunnel_proxy: false,
             routing: Routing::default(),
             psiphon: PsiphonSettings::default(),
+            core: Core::SingBox,
             group_configs: true,
         }
     }

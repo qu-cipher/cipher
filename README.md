@@ -7,13 +7,15 @@ for an existing engine, and runs that engine as a child process:
 
 - **[sing-box](https://sing-box.sagernet.org)** for proxy protocols (VLESS, VMess, Trojan, Shadowsocks,
   Hysteria2, TUIC, AnyTLS) and WireGuard
+- **[Xray-core](https://github.com/XTLS/Xray-core)** for what sing-box can't run (XHTTP/SplitHTTP, mKCP,
+  VLESS encryption), and optionally for all VLESS/VMess/Trojan/Shadowsocks configs; chained behind sing-box
 - **OpenVPN** for `.ovpn` files and `ovpn://` links
 - **[Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core)** (its ConsoleClient) for the built-in
   *Psiphon Tunnel* entry, chained behind sing-box. **Temporarily disabled** (see below)
 
 > **Status:** a personal project, early but usable. Tested on Linux (CachyOS) with real servers in
-> Tunnel and proxy modes. The Windows build has never been compiled or run. OpenVPN has only been
-> tested locally. It hasn't had a security review.
+> Tunnel and proxy modes. Windows builds and passes the tests in CI but hasn't been run on Windows yet.
+> OpenVPN has only been tested locally. It hasn't had a security review.
 
 ## Features
 
@@ -30,6 +32,10 @@ for an existing engine, and runs that engine as a child process:
   | Proxy only | Local SOCKS5/HTTP proxy on `127.0.0.1:2080`; apps opt in | No |
 
   OpenVPN works in Tunnel mode only.
+- **Xray core:** links with XHTTP (or SplitHTTP), mKCP or VLESS encryption become Xray configs automatically.
+  *Settings → Engines → Core* can also run every VLESS/VMess/Trojan/Shadowsocks config on Xray instead of
+  sing-box, except the ones Xray can't run the same way (insecure TLS, h2/QUIC, multiplex, plain VLESS/Trojan).
+  sing-box stays in front of Xray, so all three modes and the routing rules work the same.
 - **Psiphon Tunnel** (*temporarily disabled*: Psiphon doesn't publish a config for its public network, it's
   requested from the Psiphon team. The code stays, and `psiphon::ENABLED` turns it back on): a built-in entry in the Configs list. Psiphon finds its own servers. Import a Psiphon
   client config (the network part: `PropagationChannelId`, `SponsorId`, server list URLs and keys) in
@@ -44,14 +50,15 @@ for an existing engine, and runs that engine as a child process:
   grouping toggles from the Configs toolbar.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
   (DNS-over-HTTPS through the tunnel).
-- **Engine management:** downloads a pinned sing-box release, and a pinned Psiphon ConsoleClient build
-  (Linux x86_64, Windows), and checks their SHA-256.
+- **Engine management:** downloads pinned sing-box and Xray releases, and a pinned Psiphon ConsoleClient
+  build (Linux x86_64, Windows), and checks their SHA-256.
 
 ### Not supported
 
-sing-box can't run these, so the app rejects them on import and says why:
-- Xray-only features: XHTTP/SplitHTTP and mKCP transports, VLESS `encryption`
+Neither engine runs these, so the app rejects them on import and says why:
 - AmneziaWG
+- Xray-only links with `allowInsecure` lose that flag (Xray removed it), and plain VLESS/Trojan without TLS
+  to a public address is refused by Xray
 
 The app doesn't handle these yet:
 - ShadowTLS links
@@ -63,8 +70,10 @@ The app doesn't handle these yet:
 - **sing-box 1.12 or newer** (tested on 1.14.3). Install it yourself, put it next to the executable, or use
   *Settings → Engines → Download*.
 - **openvpn**, only for `.ovpn` configs (from your package manager)
-- **psiphon-tunnel-core**, only for Psiphon Tunnel (*Settings → Engines → Download*), plus a Psiphon
-  network config. Psiphon Inc. hands those out (developer-support@psiphon.ca); none ships with the app.
+- **Xray**, only for Xray configs or the Xray core (tested with 26.9.9; *Settings → Engines → Download*
+  installs 26.10.21)
+- **psiphon-tunnel-core**, only for Psiphon Tunnel, which is disabled for now (it needs a network config
+  from the Psiphon team)
 
 The app looks for engines next to its own executable first, then in `<data dir>/bin`, then in `PATH`.
 
@@ -89,11 +98,12 @@ The proxy modes need no special rights.
 
 ```sh
 cargo test                  # unit tests, config round-trips, generator checks
-cargo test -- --ignored     # also: real `sing-box check` on generated configs, real release download
+cargo test -- --ignored     # also: real `sing-box check` / `xray run -test` on generated configs, real release download
+                            # (XRAY_BINARY=/path/to/xray if xray isn't in PATH or <data>/bin)
 CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture
                             # drives the real UI headlessly and saves a frame per step (raw RGBA, 820×520)
 CIPHER_SCREENSHOTS=/tmp/shots cargo test routing_screenshots -- --ignored
-                            # Settings (routing, Psiphon) and the Configs list; never connects
+                            # Settings (engines, core, routing) and the Configs list; never connects
 ```
 
 No test connects to a VPN server.
@@ -148,7 +158,7 @@ artifacts. Engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app download
 | `src/routing.rs` | Routing rules, presets and the default route; input parsing and normalization |
 | `src/store.rs` | Saved state (`state.json`): configs, subscriptions, selection, settings |
 | `src/import/` | Share-link parsers (one file per protocol in `link/`), WireGuard/OpenVPN files, subscriptions, sing-box JSON |
-| `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Psiphon engine (`psiphon.rs`) |
+| `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Xray (`xray.rs`, `xray/`) and Psiphon engines chained behind sing-box (`chain.rs`) |
 | `src/engine/singbox/config/` | Typed serde model of the sing-box config (client-side subset, 1.12+ format only) |
 | `src/engine/singbox/generate.rs` | Builds the sing-box config from a profile and settings (routing rules in `generate/routing.rs`) |
 | `ui/state.slint` | `AppState`: every property and callback shared between Rust and the UI |
@@ -186,7 +196,8 @@ Linux `~/.local/share/cipher_client/`, Windows `%APPDATA%\cipher_client\`:
 | `openvpn.ovpn` | An `ovpn://` config, written while connected and deleted on disconnect |
 | `cache.db` | sing-box cache, including downloaded geo rule sets |
 | `psiphon.json` / `psiphon.log` / `psiphon/` | Generated Psiphon client config, its notices (JSON lines), and its data store |
-| `bin/` | sing-box and Psiphon downloaded by the app |
+| `xray.json` / `xray.log` | The last generated Xray config and its log |
+| `bin/` | sing-box, Xray and Psiphon downloaded by the app |
 
 ## License
 

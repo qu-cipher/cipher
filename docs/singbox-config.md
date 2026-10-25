@@ -16,7 +16,7 @@ We only emit the 1.12+ formats: typed DNS servers, `domain_resolver`, `endpoints
 
 OpenVPN is not sing-box — it runs as its own process (`engine::openvpn`) and only supports Tunnel mode (`EngineError::TunnelOnly`).
 
-Psiphon is chained: sing-box runs in front of it in every mode (§10).
+Xray and Psiphon are chained: sing-box runs in front of them in every mode (§10, §11).
 
 ## 0. Where things live
 
@@ -295,4 +295,37 @@ Starting sing-box only after Psiphon connects means Psiphon's bootstrap (server 
 - `CONNECT_TIMEOUT` starts after that.
 
 Binaries: `install::install_psiphon` downloads `Psiphon-Labs/psiphon-tunnel-core-binaries` at the pinned `PSIPHON_COMMIT` (Linux x86_64; Windows i686 only) into `<data>/bin/psiphon-tunnel-core`, checked against SHA-256. `-version` prints only a git revision, shown as `rev …`.
+
+## 11. Xray chaining (`src/engine/xray.rs`, `engine/chain.rs`)
+
+`engine::chain::Chain` runs an upstream engine with a local SOCKS proxy, and sing-box in front of it once the upstream is up. It's shared by Xray and Psiphon. sing-box gets `Profile::Proxy` with a `socks` outbound to `127.0.0.1:<free port>` (TCP+UDP for Xray), plus the upstream's process name routed direct (§10).
+
+Which configs run on Xray:
+- **`Profile::Xray { name, outbound: XrayOutbound }`**: links sing-box can't run, from `import/xray.rs`. These are `type=xhttp|splithttp|kcp|mkcp`, or VLESS `encryption` other than `none`.
+- **With `Settings.core = Xray`**: `xray::effective()` converts sing-box VLESS/VMess/Trojan/Shadowsocks outbounds at connect time (`xray/convert.rs`). A config stays on sing-box when Xray can't run it the same way: insecure TLS, h2/QUIC, multiplex, Shadowsocks plugins or AES-192, VMess alterId, or VLESS/Trojan without TLS.
+
+The generated `<data>/xray.json` is checked with `xray run -test -c` before `xray run -c`:
+
+```json
+{
+  "log": { "loglevel": "info" },
+  "dns": { "servers": ["8.8.8.8"], "tag": "dns-direct" },
+  "inbounds": [{ "tag": "socks-in", "listen": "127.0.0.1", "port": 40123, "protocol": "socks", "settings": { "auth": "noauth", "udp": true } }],
+  "outbounds": [
+    { "tag": "proxy", "protocol": "vless", "settings": { "vnext": [ … ] },
+      "streamSettings": { "network": "xhttp", "security": "reality", …, "sockopt": { "domainStrategy": "UseIP" } } },
+    { "tag": "direct", "protocol": "freedom" }
+  ],
+  "routing": { "rules": [{ "inboundTag": ["dns-direct"], "outboundTag": "direct" }] }
+}
+```
+
+- **`sockopt.domainStrategy: UseIP`:** the server's domain resolves through Xray's own DNS (`Settings.dns_direct`, sent direct). The system resolver would go through the TUN and back into Xray.
+- **sing-box start:** the Xray SOCKS port accepting a TCP connection means "up", and sing-box starts then.
+- **Xray 26 rules** (checked with `xray run -test`, 26.9.9):
+  - `allowInsecure` is gone (it's `pinnedPeerCertSha256` / `verifyPeerCertByName` now).
+  - Plain VLESS and plain Trojan to a public address are refused.
+  - `tcp` is `raw`, and the h2 (`http`) and QUIC transports are gone.
+  - A malformed VLESS encryption key crashes the config loader.
+- **Install:** `install::install_xray` downloads `Xray-<platform>.zip` from the pinned `XRAY_VERSION` release, checks GitHub's SHA-256, and extracts only the executable (no geo files) with the `zip` crate.
 

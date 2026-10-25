@@ -2,7 +2,7 @@ use crate::engine::singbox::{
     config::outbound::{Outbound, vmess::VmessOutbound},
     generate::PROXY_TAG,
 };
-use crate::import::{ImportError, decode_base64, link::{self, Params}};
+use crate::import::{ImportError, decode_base64, link::{self, Params}, xray};
 use crate::profile::Profile;
 use serde_json::Value;
 
@@ -42,10 +42,17 @@ pub fn parse(link: &str) -> Result<Profile, ImportError> {
     set("sni", field("sni"));
     set("alpn", field("alpn"));
     set("fp", field("fp"));
-    if net == "grpc" {
-        set("servicename", field("path"));
-    } else {
-        set("path", field("path"));
+    match net.as_str() {
+        "grpc" => set("servicename", field("path")),
+        // v2rayN keeps the mKCP seed in `path`.
+        "kcp" | "mkcp" => set("seed", field("path")),
+        _ => set("path", field("path")),
+    }
+
+    let name = field("ps").unwrap_or_else(|| format!("{server}:{server_port}"));
+    if xray::needed(&params) {
+        let credentials = xray::Credentials::Vmess { id: uuid, security: Some(field("scy").unwrap_or_else(|| "auto".into())) };
+        return xray::profile(name, credentials, &server, server_port, &params);
     }
 
     let outbound = Outbound::Vmess(VmessOutbound {
@@ -59,6 +66,5 @@ pub fn parse(link: &str) -> Result<Profile, ImportError> {
         transport: link::transport(&params)?,
         ..Default::default()
     });
-    let name = field("ps").unwrap_or_else(|| format!("{server}:{server_port}"));
     Ok(link::proxy(name, outbound))
 }

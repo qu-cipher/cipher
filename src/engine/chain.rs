@@ -22,6 +22,7 @@ pub fn free_port() -> std::io::Result<u16> {
 pub struct Chain {
     upstream: Process,
     log_path: PathBuf,
+    socks_port: u16,
     /// The upstream's process name, routed direct by sing-box.
     process_name: String,
     /// The sing-box side to start: a SOCKS profile pointing at the upstream, and the settings.
@@ -51,6 +52,7 @@ impl Chain {
         Self {
             upstream,
             log_path,
+            socks_port,
             process_name: binary.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
             pending: Some((Profile::Proxy { name: name.into(), outbound }, settings.clone())),
             singbox: None,
@@ -59,6 +61,10 @@ impl Chain {
 
     pub fn log(&self) -> String {
         fs::read_to_string(&self.log_path).unwrap_or_default()
+    }
+
+    pub fn socks_port(&self) -> u16 {
+        self.socks_port
     }
 
     /// The upstream's status, then sing-box's. Also moves the start along: sing-box starts as
