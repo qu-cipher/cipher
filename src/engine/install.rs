@@ -1,7 +1,9 @@
-//! Finds the engine binaries, reports their versions, and installs sing-box.
+//! Finds the engine binaries, reports their versions, and installs sing-box and Psiphon.
 //!
 //! sing-box is downloaded from the official GitHub release, pinned to the version the generated
 //! configs are tested against, and checked against the release's SHA-256 before it is used.
+//! Psiphon has no release binaries: its ConsoleClient builds live in the
+//! `psiphon-tunnel-core-binaries` repo, pinned here to a commit and checked the same way.
 
 use crate::engine::{EngineError, paths, process::hide_console};
 use std::{
@@ -23,15 +25,28 @@ const SINGBOX_ASSETS: [(&str, &str); 4] = [
 ];
 const DOWNLOAD_LIMIT: u64 = 200 * 1024 * 1024;
 
+/// Commit of Psiphon-Labs/psiphon-tunnel-core-binaries (2026-10-05, ConsoleClient rev c4a09096ab).
+pub const PSIPHON_COMMIT: &str = "33ff79e89260f3adf92e846b96b3369b86a819d8";
+/// (path in that repo, SHA-256). Windows only has a 32-bit build; it runs on 64-bit Windows too.
+const PSIPHON_LINUX_X64: (&str, &str) =
+    ("linux/psiphon-tunnel-core-x86_64", "046ca168da25d2c0e61c1c15e2b73bfbb67f5208112a4c94fe58fc5aab784f19");
+const PSIPHON_WINDOWS: (&str, &str) =
+    ("windows/psiphon-tunnel-core-i686.exe", "34139a07deca9e9b94e5b55ebdf5e2583ca87f3d838873f105488681d22f4a0e");
+
 pub struct EngineInfo {
     pub path: PathBuf,
     pub version: String,
 }
 
-/// Locates an engine and asks it for its version (`sing-box version`, `openvpn --version`).
+/// Locates an engine and asks it for its version
+/// (`sing-box version`, `openvpn --version`, `psiphon-tunnel-core -version`).
 pub fn installed(name: &str) -> Option<EngineInfo> {
     let path = paths::find_binary(name).ok()?;
-    let flag = if name == "openvpn" { "--version" } else { "version" };
+    let flag = match name {
+        "openvpn" => "--version",
+        crate::engine::psiphon::BINARY => "-version",
+        _ => "version",
+    };
     let mut command = Command::new(&path);
     command.arg(flag);
     hide_console(&mut command);
@@ -39,6 +54,10 @@ pub fn installed(name: &str) -> Option<EngineInfo> {
 
     // "sing-box version 1.14.3" / "OpenVPN 2.6.14 x86_64-pc-linux-gnu [SSL …]"
     let text = String::from_utf8_lossy(&output.stdout);
+    // Psiphon has no version number, only the git revision it was built from: "  Revision: c4a09096ab"
+    if let Some(revision) = text.lines().find_map(|line| line.trim().strip_prefix("Revision:")) {
+        return Some(EngineInfo { path, version: format!("rev {}", revision.trim()) });
+    }
     let version = text
         .lines()
         .next()?
@@ -75,6 +94,43 @@ pub fn install_singbox(data_dir: &Path) -> Result<EngineInfo, EngineError> {
     result?;
 
     installed("sing-box").ok_or_else(|| EngineError::Install("sing-box was installed but doesn't run".into()))
+}
+
+/// Downloads, verifies and installs Psiphon's ConsoleClient into `<data>/bin`. Blocking.
+pub fn install_psiphon(data_dir: &Path) -> Result<EngineInfo, EngineError> {
+    let (path, sha256) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => PSIPHON_LINUX_X64,
+        ("windows", _) => PSIPHON_WINDOWS,
+        _ => return Err(EngineError::Install("there is no Psiphon build for this platform".into())),
+    };
+    let url = format!("https://raw.githubusercontent.com/Psiphon-Labs/psiphon-tunnel-core-binaries/{PSIPHON_COMMIT}/{path}");
+
+    let bin = paths::bin_dir(data_dir);
+    fs::create_dir_all(&bin)?;
+    let target = bin.join(format!("{}{}", crate::engine::psiphon::BINARY, std::env::consts::EXE_SUFFIX));
+    let partial = target.with_extension("download");
+    let result = download(&url, &partial)
+        .and_then(|()| verify_sha256(&partial, sha256))
+        .and_then(|()| {
+            make_executable(&partial)?;
+            let _ = fs::remove_file(&target);
+            Ok(fs::rename(&partial, &target)?)
+        });
+    let _ = fs::remove_file(&partial);
+    result?;
+
+    installed(crate::engine::psiphon::BINARY)
+        .ok_or_else(|| EngineError::Install("Psiphon was installed but doesn't run".into()))
+}
+
+fn make_executable(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+    }
+    let _ = path;
+    Ok(())
 }
 
 fn download(url: &str, to: &Path) -> Result<(), EngineError> {

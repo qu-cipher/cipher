@@ -4,11 +4,11 @@
 //! connecting, latency tests, file dialogs) runs on background threads, which post their
 //! results back to the UI thread with `upgrade_in_event_loop`.
 
-use crate::engine::{self, Engine, EngineKind, Status, install, openvpn, paths, process, singbox};
+use crate::engine::{self, Engine, Status, install, openvpn, paths, process, psiphon, singbox};
 use crate::engine::singbox::config::log::LogLevel;
 use crate::import::{self, ImportError};
 use crate::engine::singbox::generate::PROXY_LISTEN;
-use crate::profile::{ConnectionMode, Credentials, Profile, Settings};
+use crate::profile::{ConnectionMode, Credentials, Profile, PsiphonSettings, Settings};
 use crate::routing::{Preset, Rule, RuleKind, Routing, Target};
 use crate::store::{self, Store};
 use crate::{AppState, AppWindow, ConfigData, ConnectionState, PresetData, RuleData, SubscriptionData};
@@ -35,7 +35,7 @@ const ROUTE_DEFAULTS: [Target; 2] = [Target::Proxy, Target::Direct];
 const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
 const STARTUP_GRACE: Duration = Duration::from_millis(1500);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
-/// How long the admin password dialog may stay open.
+/// How long the admin password dialog may stay open (for Psiphon: also its first connection).
 const PASSWORD_TIMEOUT: Duration = Duration::from_secs(120);
 const LATENCY_TIMEOUT: Duration = Duration::from_secs(3);
 const LATENCY_WORKERS: usize = 16;
@@ -206,6 +206,8 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
         }
     }));
     on!(ui, ctx, on_install_singbox, |ui, ctx| install_singbox(&ui, ctx));
+    on!(ui, ctx, on_install_psiphon, |ui, ctx| install_psiphon(&ui, ctx));
+    on!(ui, ctx, on_import_psiphon_network, |ui, ctx| import_psiphon_network(&ui, ctx));
     on!(ui, ctx, on_open_data_dir, |ui, ctx| {
         if let Err(e) = paths::data_dir().and_then(|dir| open_external(&dir).map_err(Into::into)) {
             notify(&ui, ctx, format!("Couldn't open the data folder: {e}"), true);
@@ -316,9 +318,9 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
 
     let rows: Vec<ConfigData> = store
         .all_entries()
-        .filter(|(source, _)| match *filter {
+        .filter(|(source, entry)| match *filter {
             Filter::All => true,
-            Filter::Manual => source.is_none(),
+            Filter::Manual => source.is_none() && !store::is_builtin(entry.id),
             Filter::Subscription(id) => source.is_some_and(|s| s.id == id),
         })
         .map(|(source, entry)| {
@@ -327,17 +329,18 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
                 id: entry.id as i32,
                 name: entry.profile.name().into(),
                 protocol: entry.profile.protocol().into(),
-                source: source.map_or("Added manually", |s| s.name.as_str()).into(),
+                source: source_label(source, entry.id).into(),
                 latency: latency.into(),
                 latency_level: level,
-                removable: source.is_none(),
+                removable: source.is_none() && !store::is_builtin(entry.id),
             }
         })
         .collect();
 
     state.set_filters(ModelRc::new(VecModel::from(filters)));
     state.set_filter_index(filter_index as i32);
-    state.set_config_total(store.all_entries().count() as i32);
+    // Built-in entries don't count: "no configs yet" still means none of the user's own.
+    state.set_config_total(store.all_entries().filter(|(_, e)| !store::is_builtin(e.id)).count() as i32);
     state.set_configs(ModelRc::new(VecModel::from(rows)));
 
     // The selected config card.
@@ -347,9 +350,17 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
             state.set_selected_id(entry.id as i32);
             state.set_selected_name(entry.profile.name().into());
             state.set_selected_protocol(entry.profile.protocol().into());
-            state.set_selected_source(source.map_or("Added manually", |s| s.name.as_str()).into());
+            state.set_selected_source(source_label(source, entry.id).into());
         }
         None => state.set_selected_id(-1),
+    }
+}
+
+fn source_label(source: Option<&store::StoredSubscription>, id: u64) -> &str {
+    match source {
+        Some(s) => &s.name,
+        None if store::is_builtin(id) => "Built-in",
+        None => "Added manually",
     }
 }
 
@@ -449,7 +460,7 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
         let Some(files) = rfd::FileDialog::new()
             .set_title("Import WireGuard or OpenVPN configs")
             .add_filter("WireGuard / OpenVPN", &["conf", "ovpn"])
-            .add_filter("Share links / sing-box config", &["txt", "json"])
+            .add_filter("Share links / sing-box or Psiphon config", &["txt", "json", "config"])
             .pick_files()
         else {
             return;
@@ -457,7 +468,12 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
 
         let mut profiles = Vec::new();
         let mut errors = Vec::new();
+        let mut psiphon_network = None;
         for file in &files {
+            if let Ok(text) = std::fs::read_to_string(file) && psiphon::looks_like_network(&text) {
+                psiphon_network = Some(psiphon::parse_network(&text));
+                continue;
+            }
             match import_file(file) {
                 Ok(found) => profiles.extend(found),
                 Err(e) => errors.push(format!("{}: {e}", file.file_name().unwrap_or_default().to_string_lossy())),
@@ -465,6 +481,12 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
         }
 
         on_ui(&weak, &ctx, move |ui, ctx| {
+            if let Some(network) = psiphon_network {
+                set_psiphon_network(ui, ctx, network);
+                if profiles.is_empty() {
+                    return;
+                }
+            }
             if profiles.is_empty() {
                 let reason = errors.first().cloned().unwrap_or_else(|| "No configs found".into());
                 notify(ui, ctx, format!("Nothing imported. {reason}"), true);
@@ -813,7 +835,7 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
 
         let result = start_engine(&profile, &settings, &ctx.cancel);
         let result = result.map(|engine| *ctx.engine.lock().unwrap() = Some(engine));
-        let proxy_address = match settings.serves_proxy() && profile.engine_kind() == EngineKind::SingBox {
+        let proxy_address = match settings.serves_proxy() && profile.engine_kind().runs_singbox() {
             true => format!("{PROXY_LISTEN}:{}", settings.proxy_port),
             false => String::new(),
         };
@@ -884,6 +906,8 @@ fn explain(reason: String) -> String {
         "Tunnel mode asks for the admin password through pkexec (polkit), which isn't installed.".into()
     } else if lower.contains("`sing-box") && lower.contains("not found") {
         "sing-box isn't installed yet: download it in Settings → Engines.".into()
+    } else if lower.contains(&format!("`{}", psiphon::BINARY)) && lower.contains("not found") {
+        "Psiphon isn't installed yet: download it in Settings → Engines.".into()
     } else if lower.contains("`openvpn") && lower.contains("not found") {
         "OpenVPN isn't installed: see Settings → Engines.".into()
     } else if lower.contains("rule-set") {
@@ -955,6 +979,16 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_proxy_port(settings.proxy_port.to_string().into());
     state.set_tunnel_proxy(settings.tunnel_proxy);
     state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
+    let regions: Vec<SharedString> = psiphon::REGIONS
+        .iter()
+        .map(|(code, name)| match code.is_empty() {
+            true => SharedString::from(*name),
+            false => format!("{name} ({code})").into(),
+        })
+        .collect();
+    state.set_psiphon_regions(ModelRc::new(VecModel::from(regions)));
+    state.set_psiphon_region(psiphon::REGIONS.iter().position(|(code, _)| *code == settings.psiphon.region).unwrap_or(0) as i32);
+    state.set_psiphon_network(psiphon_network_status(&settings.psiphon).into());
     if let Ok(dir) = paths::data_dir() {
         state.set_data_dir(dir.display().to_string().into());
     }
@@ -983,6 +1017,11 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         routing: Routing {
             default: ROUTE_DEFAULTS.get(state.get_route_default() as usize).copied().unwrap_or_default(),
             ..store.settings.routing.clone()
+        },
+        // The network config is imported through its own callback.
+        psiphon: PsiphonSettings {
+            region: psiphon::REGIONS.get(state.get_psiphon_region() as usize).map_or("", |(code, _)| code).into(),
+            ..store.settings.psiphon.clone()
         },
     };
 
@@ -1094,6 +1133,7 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
     thread::spawn(move || {
         let singbox = install::installed("sing-box");
         let openvpn = install::installed("openvpn");
+        let psiphon = install::installed(psiphon::BINARY);
 
         let usable = singbox.as_ref().is_some_and(|info| version_at_least(&info.version, singbox::MIN_VERSION));
         let singbox_status = match &singbox {
@@ -1106,12 +1146,19 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
             None if cfg!(windows) => "Not installed. Get it from openvpn.net to use .ovpn configs.".into(),
             None => "Not installed. Install it with your package manager to use .ovpn configs.".into(),
         };
+        let psiphon_installed = psiphon.is_some();
+        let psiphon_status = match &psiphon {
+            Some(info) => format!("{} · {}", info.version, info.path.display()),
+            None => "Not installed. Needed for Psiphon Tunnel.".into(),
+        };
 
         on_ui(&weak, &ctx, move |ui, _| {
             let state = ui.global::<AppState>();
             state.set_singbox_installed(usable);
             state.set_singbox_status(singbox_status.into());
             state.set_openvpn_status(openvpn_status.into());
+            state.set_psiphon_installed(psiphon_installed);
+            state.set_psiphon_status(psiphon_status.into());
         });
     });
 }
@@ -1133,6 +1180,65 @@ fn install_singbox(ui: &AppWindow, ctx: &Ctx) {
             refresh_engines(ui, ctx);
         });
     });
+}
+
+fn install_psiphon(ui: &AppWindow, ctx: &Ctx) {
+    let Ok(data_dir) = paths::data_dir() else { return };
+    ui.global::<AppState>().set_psiphon_busy(true);
+
+    let weak = ui.as_weak();
+    let ctx = ctx.clone();
+    thread::spawn(move || {
+        let result = install::install_psiphon(&data_dir);
+        on_ui(&weak, &ctx, move |ui, ctx| {
+            ui.global::<AppState>().set_psiphon_busy(false);
+            match result {
+                Ok(info) => notify(ui, ctx, format!("Installed Psiphon ({})", info.version), false),
+                Err(e) => notify(ui, ctx, e.to_string(), true),
+            }
+            refresh_engines(ui, ctx);
+        });
+    });
+}
+
+// ───────────────────────────── Psiphon ─────────────────────────────
+
+fn psiphon_network_status(settings: &PsiphonSettings) -> String {
+    match &settings.network {
+        Some(network) => {
+            let channel = network.get("PropagationChannelId").and_then(|v| v.as_str()).unwrap_or_default();
+            format!("Imported · channel {}", channel.chars().take(8).collect::<String>())
+        }
+        None => "Not set. Import a Psiphon client config (JSON with PropagationChannelId, SponsorId and server lists).".into(),
+    }
+}
+
+fn import_psiphon_network(ui: &AppWindow, ctx: &Ctx) {
+    let weak = ui.as_weak();
+    let ctx = ctx.clone();
+    thread::spawn(move || {
+        let Some(file) = rfd::FileDialog::new()
+            .set_title("Import Psiphon config")
+            .add_filter("Psiphon config", &["json", "config", "txt"])
+            .pick_file()
+        else {
+            return;
+        };
+        let result = std::fs::read_to_string(&file).map_err(|e| e.to_string()).and_then(|text| psiphon::parse_network(&text));
+        on_ui(&weak, &ctx, move |ui, ctx| set_psiphon_network(ui, ctx, result));
+    });
+}
+
+fn set_psiphon_network(ui: &AppWindow, ctx: &Ctx, network: Result<serde_json::Map<String, serde_json::Value>, String>) {
+    let network = match network {
+        Ok(network) => network,
+        Err(e) => return notify(ui, ctx, format!("Not a Psiphon config: {e}"), true),
+    };
+    let mut store = ctx.store.lock().unwrap();
+    store.settings.psiphon.network = Some(network);
+    save(ui, ctx, &store);
+    ui.global::<AppState>().set_psiphon_network(psiphon_network_status(&store.settings.psiphon).into());
+    notify(ui, ctx, "Imported the Psiphon config", false);
 }
 
 /// `"1.14.3" >= "1.12.0"`, comparing numerically part by part.

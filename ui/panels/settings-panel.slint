@@ -86,6 +86,21 @@ export component SettingsPanel inherits ScrollView {
                 label: "OpenVPN";
                 hint: AppState.openvpn-status;
             }
+
+            Row {
+                label: "Psiphon";
+                hint: AppState.psiphon-status;
+
+                if !AppState.psiphon-installed: VerticalLayout {
+                    alignment: center;
+                    PillButton {
+                        text: AppState.psiphon-busy ? "Downloading…" : "Download";
+                        primary: true;
+                        enabled: !AppState.psiphon-busy && AppState.connection == ConnectionState.disconnected;
+                        clicked => { AppState.install-psiphon(); }
+                    }
+                }
+            }
         }
 
         Section {
@@ -175,6 +190,37 @@ export component SettingsPanel inherits ScrollView {
                 Toggle {
                     checked <=> AppState.tunnel-proxy;
                     toggled => { AppState.settings-changed(); }
+                }
+            }
+        }
+
+        Section {
+            title: "PSIPHON";
+
+            Row {
+                label: "Network config";
+                hint: AppState.psiphon-network;
+                VerticalLayout {
+                    alignment: center;
+                    PillButton {
+                        text: "Import";
+                        icon: @image-url("../../assets/icons/MdiFileImport.svg");
+                        clicked => { AppState.import-psiphon-network(); }
+                    }
+                }
+            }
+
+            Row {
+                label: "Exit country";
+                hint: "Where Psiphon Tunnel's traffic leaves the Psiphon network.";
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 170px;
+                        model: AppState.psiphon-regions;
+                        current-index <=> AppState.psiphon-region;
+                        selected => { AppState.settings-changed(); }
+                    }
                 }
             }
         }

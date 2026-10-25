@@ -30,7 +30,14 @@ const SCHEMA_URL: &str = "https://sing-box.sagernet.org/schema.json";
 const TUN_ADDRESS: [&str; 2] = ["172.18.0.1/30", "fdfe:dcba:9876::1/126"];
 pub const PROXY_LISTEN: &str = "127.0.0.1";
 
-pub fn build_config(profile: &Profile, settings: &Settings, data_dir: &Path) -> Result<SingBoxConfig, EngineError> {
+/// Traffic from `direct_processes` always goes direct. A chained engine (Psiphon) needs that
+/// in Tunnel mode, or its own connections would loop back into it.
+pub fn build_config(
+    profile: &Profile,
+    settings: &Settings,
+    data_dir: &Path,
+    direct_processes: &[String],
+) -> Result<SingBoxConfig, EngineError> {
     let mut outbounds = Vec::new();
     let mut endpoints = Vec::new();
 
@@ -46,6 +53,7 @@ pub fn build_config(profile: &Profile, settings: &Settings, data_dir: &Path) -> 
             endpoints.push(Endpoint::Wireguard(endpoint));
         }
         Profile::OpenVpn { .. } => return Err(EngineError::WrongEngine(EngineKind::OpenVpn)),
+        Profile::Psiphon { .. } => return Err(EngineError::WrongEngine(EngineKind::Psiphon)),
     }
 
     outbounds.push(Outbound::Direct(DirectOutbound {
@@ -67,7 +75,7 @@ pub fn build_config(profile: &Profile, settings: &Settings, data_dir: &Path) -> 
         inbounds: inbounds(settings),
         outbounds,
         endpoints,
-        route: Some(route(settings, routed.rules, routed.rule_sets)),
+        route: Some(route(settings, direct_processes, routed.rules, routed.rule_sets)),
         experimental: Some(Experimental {
             cache_file: Some(CacheFile {
                 enabled: Some(true),
@@ -138,7 +146,7 @@ fn dns(settings: &Settings, rules: Vec<DnsRule>) -> DNS {
     }
 }
 
-fn route(settings: &Settings, routing_rules: Vec<RouteRule>, rule_set: Vec<RuleSet>) -> Route {
+fn route(settings: &Settings, direct_processes: &[String], routing_rules: Vec<RouteRule>, rule_set: Vec<RuleSet>) -> Route {
     let tunnel = settings.mode.uses_tunnel();
     let mut rules = vec![RouteRule {
         action: Some(RuleAction::Sniff),
@@ -150,6 +158,16 @@ fn route(settings: &Settings, routing_rules: Vec<RouteRule>, rule_set: Vec<RuleS
         rules.push(RouteRule {
             protocol: Some(vec!["dns".into()]),
             action: Some(RuleAction::HijackDns),
+            ..Default::default()
+        });
+    }
+
+    // Before any user rule: these must never be proxied.
+    if !direct_processes.is_empty() {
+        rules.push(RouteRule {
+            process_name: Some(direct_processes.to_vec()),
+            action: Some(RuleAction::Route),
+            outbound: Some(DIRECT_TAG.into()),
             ..Default::default()
         });
     }
@@ -253,7 +271,7 @@ mod tests {
     }
 
     fn build(profile: &Profile, settings: &Settings) -> Value {
-        let config = build_config(profile, settings, Path::new("/data")).unwrap();
+        let config = build_config(profile, settings, Path::new("/data"), &[]).unwrap();
         serde_json::to_value(config).unwrap()
     }
 
@@ -340,7 +358,7 @@ mod tests {
     fn openvpn_profile_is_rejected() {
         let profile = Profile::OpenVpn { name: "Work".into(), config: OpenVpnConfig::File("work.ovpn".into()), credentials: None };
         assert!(matches!(
-            build_config(&profile, &Settings::default(), Path::new("/data")),
+            build_config(&profile, &Settings::default(), Path::new("/data"), &[]),
             Err(EngineError::WrongEngine(EngineKind::OpenVpn))
         ));
     }
@@ -432,11 +450,23 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let modes = [ConnectionMode::Tunnel, ConnectionMode::SystemProxy, ConnectionMode::ProxyOnly];
-        for (name, profile) in [("vless", vless_profile()), ("wireguard", wireguard_profile())] {
+        // Psiphon's sing-box side: a SOCKS outbound to it, its own process routed direct.
+        let psiphon = Profile::Proxy {
+            name: "Psiphon Tunnel".into(),
+            outbound: Outbound::Socks(crate::engine::singbox::config::outbound::socks::SocksOutbound {
+                server: "127.0.0.1".into(),
+                server_port: 40123,
+                version: Some("5".into()),
+                network: Some(crate::engine::singbox::config::shared::Network::Tcp),
+                ..Default::default()
+            }),
+        };
+        let bypass = ["psiphon-tunnel-core".to_owned()];
+        for (name, profile, direct) in [("vless", vless_profile(), &[][..]), ("wireguard", wireguard_profile(), &[]), ("psiphon", psiphon, &bypass)] {
             for mode in modes {
                 for (variant, routing) in [("plain", Routing::default()), ("routed", full_routing())] {
                     let settings = Settings { mode, tunnel_proxy: true, routing, ..Default::default() };
-                    let config = build_config(&profile, &settings, &dir).unwrap();
+                    let config = build_config(&profile, &settings, &dir, direct).unwrap();
                     let path = dir.join(format!("{name}-{mode:?}-{variant}.json"));
                     std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
 

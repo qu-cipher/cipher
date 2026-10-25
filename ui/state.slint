@@ -129,6 +129,17 @@ export global AppState {
     in property <string> openvpn-status;
     // downloading sing-box
     in property <bool> engine-busy;
+    in property <string> psiphon-status;
+    in property <bool> psiphon-installed;
+    // downloading Psiphon
+    in property <bool> psiphon-busy;
+
+    // ── Psiphon ──
+    // "Imported · channel …" or what to do
+    in property <string> psiphon-network;
+    in property <[string]> psiphon-regions: ["Fastest"];
+    // index into `psiphon-regions`
+    in-out property <int> psiphon-region;
 
     callback toggle-connection();
     callback mode-changed();
@@ -158,6 +169,9 @@ export global AppState {
     // index, then -1 (up) or 1 (down)
     callback move-rule(int, int);
     callback install-singbox();
+    callback install-psiphon();
+    // file dialog for a Psiphon JSON client config
+    callback import-psiphon-network();
     callback open-data-dir();
     // opens a link in the default browser
     callback open-url(string);

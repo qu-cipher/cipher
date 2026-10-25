@@ -8,6 +8,8 @@ for an existing engine, and runs that engine as a child process:
 - **[sing-box](https://sing-box.sagernet.org)** for proxy protocols (VLESS, VMess, Trojan, Shadowsocks,
   Hysteria2, TUIC, AnyTLS) and WireGuard
 - **OpenVPN** for `.ovpn` files and `ovpn://` links
+- **[Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core)** (its ConsoleClient) for the built-in
+  *Psiphon Tunnel* entry, chained behind sing-box
 
 > **Status:** a personal project, early but usable. Tested on Linux (CachyOS) with real servers in
 > Tunnel and proxy modes. The Windows build has never been compiled or run. OpenVPN has only been
@@ -28,6 +30,10 @@ for an existing engine, and runs that engine as a child process:
   | Proxy only | Local SOCKS5/HTTP proxy on `127.0.0.1:2080`; apps opt in | No |
 
   OpenVPN works in Tunnel mode only.
+- **Psiphon Tunnel:** a built-in entry in the Configs list. Psiphon finds its own servers. Import a Psiphon
+  client config (the network part: `PropagationChannelId`, `SponsorId`, server list URLs and keys) in
+  *Settings → Psiphon* and pick an exit country there. sing-box runs in front of it, so all three modes and
+  the routing rules work. Psiphon's proxy only forwards TCP, so UDP apps fall back to TCP.
 - **Split tunneling and routing rules** (sing-box configs, all modes): send domains, keywords, IPs/CIDRs,
   ports, apps (process name or path), and geosite/geoip lists through the VPN, direct, or block them.
   Rules are checked top to bottom. One-click presets: Iran / China / Russia direct, Block ads. The default
@@ -35,7 +41,8 @@ for an existing engine, and runs that engine as a child process:
   through the direct DNS server.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
   (DNS-over-HTTPS through the tunnel).
-- **Engine management:** downloads a pinned sing-box release and checks its SHA-256.
+- **Engine management:** downloads a pinned sing-box release, and a pinned Psiphon ConsoleClient build
+  (Linux x86_64, Windows), and checks their SHA-256.
 
 ### Not supported
 
@@ -53,6 +60,8 @@ The app doesn't handle these yet:
 - **sing-box 1.12 or newer** (tested on 1.14.3). Install it yourself, put it next to the executable, or use
   *Settings → Engines → Download*.
 - **openvpn**, only for `.ovpn` configs (from your package manager)
+- **psiphon-tunnel-core**, only for Psiphon Tunnel (*Settings → Engines → Download*), plus a Psiphon
+  network config. Psiphon Inc. hands those out (developer-support@psiphon.ca); none ships with the app.
 
 The app looks for engines next to its own executable first, then in `<data dir>/bin`, then in `PATH`.
 
@@ -118,7 +127,7 @@ No test connects to a VPN server.
 | `src/routing.rs` | Routing rules, presets and the default route; input parsing and normalization |
 | `src/store.rs` | Saved state (`state.json`): configs, subscriptions, selection, settings |
 | `src/import/` | Share-link parsers (one file per protocol in `link/`), WireGuard/OpenVPN files, subscriptions, sing-box JSON |
-| `src/engine/` | `Engine` trait, child-process handling, binary lookup, sing-box download and permissions, OpenVPN engine |
+| `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Psiphon engine (`psiphon.rs`) |
 | `src/engine/singbox/config/` | Typed serde model of the sing-box config (client-side subset, 1.12+ format only) |
 | `src/engine/singbox/generate.rs` | Builds the sing-box config from a profile and settings (routing rules in `generate/routing.rs`) |
 | `ui/state.slint` | `AppState`: every property and callback shared between Rust and the UI |
@@ -155,7 +164,8 @@ Linux `~/.local/share/cipher_client/`, Windows `%APPDATA%\cipher_client\`:
 | `openvpn.log` | OpenVPN log |
 | `openvpn.ovpn` | An `ovpn://` config, written while connected and deleted on disconnect |
 | `cache.db` | sing-box cache, including downloaded geo rule sets |
-| `bin/` | sing-box downloaded by the app |
+| `psiphon.json` / `psiphon.log` / `psiphon/` | Generated Psiphon client config, its notices (JSON lines), and its data store |
+| `bin/` | sing-box and Psiphon downloaded by the app |
 
 ## License
 

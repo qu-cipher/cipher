@@ -237,7 +237,7 @@ fn imported_links_pass_sing_box_check() {
 
     for (i, link) in links.iter().enumerate() {
         let profile = parse_link(link).unwrap_or_else(|e| panic!("{link}: {e}"));
-        let config = build_config(&profile, &Settings::default(), &dir).unwrap();
+        let config = build_config(&profile, &Settings::default(), &dir, &[]).unwrap();
         let path = dir.join(format!("{i}.json"));
         std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
         if let Err(e) = check(&binary, &path) {

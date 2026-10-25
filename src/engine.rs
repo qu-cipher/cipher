@@ -5,11 +5,14 @@ pub mod paths;
 pub mod process;
 pub mod singbox;
 pub mod openvpn;
+pub mod psiphon;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EngineKind {
     SingBox,
     OpenVpn,
+    /// Psiphon's client, chained behind sing-box.
+    Psiphon,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,8 +42,11 @@ pub enum EngineError {
     #[error("invalid config: {0}")]
     InvalidConfig(String),
 
-    #[error("couldn't install sing-box: {0}")]
+    #[error("couldn't install the engine: {0}")]
     Install(String),
+
+    #[error("Psiphon needs its network config: import it in Settings → Psiphon")]
+    PsiphonNetworkMissing,
 
     #[error("could not determine the app data directory")]
     NoDataDir,
@@ -69,9 +75,17 @@ pub trait Engine {
     }
 }
 
+impl EngineKind {
+    /// Whether sing-box serves the connection (and with it the local proxy and routing rules).
+    pub fn runs_singbox(self) -> bool {
+        matches!(self, EngineKind::SingBox | EngineKind::Psiphon)
+    }
+}
+
 pub fn engine_for(kind: EngineKind) -> Box<dyn Engine + Send> {
     match kind {
         EngineKind::SingBox => Box::new(singbox::SingBoxEngine::default()),
         EngineKind::OpenVpn => Box::new(openvpn::OpenVpnEngine::default()),
+        EngineKind::Psiphon => Box::new(psiphon::PsiphonEngine::default()),
     }
 }

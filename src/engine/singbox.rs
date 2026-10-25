@@ -17,6 +17,8 @@ pub struct SingBoxEngine {
     process: Option<Process>,
     /// sing-box set the OS proxy for this run (System proxy mode).
     system_proxy: bool,
+    /// Process names whose traffic always goes direct (a chained engine's own connections).
+    pub direct_processes: Vec<String>,
 }
 
 impl Engine for SingBoxEngine {
@@ -26,7 +28,7 @@ impl Engine for SingBoxEngine {
         }
 
         let data_dir = paths::data_dir()?;
-        let config = generate::build_config(profile, settings, &data_dir)?;
+        let config = generate::build_config(profile, settings, &data_dir, &self.direct_processes)?;
         let config_path = data_dir.join("sing-box.json");
         paths::write_private(&config_path, &serde_json::to_string_pretty(&config)?)?;
 

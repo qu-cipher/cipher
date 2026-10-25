@@ -25,6 +25,8 @@ pub enum Profile {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         credentials: Option<Credentials>,
     },
+    /// The built-in Psiphon entry: Psiphon's client finds its own servers, sing-box sits in front.
+    Psiphon { name: String },
 }
 
 /// Where an OpenVPN profile's config lives.
@@ -58,7 +60,8 @@ impl Profile {
         match self {
             Profile::Proxy { name, .. }
             | Profile::WireGuard { name, .. }
-            | Profile::OpenVpn { name, .. } => name,
+            | Profile::OpenVpn { name, .. }
+            | Profile::Psiphon { name } => name,
         }
     }
 
@@ -81,6 +84,7 @@ impl Profile {
             },
             Profile::WireGuard { .. } => "wg",
             Profile::OpenVpn { .. } => "ovpn",
+            Profile::Psiphon { .. } => "psiphon",
         }
     }
 
@@ -105,6 +109,7 @@ impl Profile {
         match self {
             Profile::Proxy { .. } | Profile::WireGuard { .. } => EngineKind::SingBox,
             Profile::OpenVpn { .. } => EngineKind::OpenVpn,
+            Profile::Psiphon { .. } => EngineKind::Psiphon,
         }
     }
 }
@@ -146,6 +151,17 @@ pub struct Settings {
     pub tunnel_proxy: bool,
     /// Split tunneling: routing rules, presets and the default route (sing-box only).
     pub routing: Routing,
+    pub psiphon: PsiphonSettings,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PsiphonSettings {
+    /// Psiphon network parameters (`PropagationChannelId`, `SponsorId`, server list URLs and keys),
+    /// imported from a Psiphon JSON config. Everything else in the client config is generated.
+    pub network: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Exit country as an ISO 3166-1 alpha-2 code; empty = the fastest server anywhere.
+    pub region: String,
 }
 
 impl Settings {
@@ -166,6 +182,7 @@ impl Default for Settings {
             proxy_port: 2080,
             tunnel_proxy: false,
             routing: Routing::default(),
+            psiphon: PsiphonSettings::default(),
         }
     }
 }

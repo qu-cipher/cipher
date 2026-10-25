@@ -4,6 +4,7 @@ Desktop VPN client (Linux + Windows) written in Rust with a **Slint** UI. It doe
 protocols itself: it imports configs, then drives external engines as child processes:
 - **sing-box** (≥ 1.12, pinned/tested 1.14.3) for proxy protocols and WireGuard
 - **openvpn** binary for `.ovpn` files (Tunnel mode only)
+- **psiphon-tunnel-core** (Psiphon ConsoleClient) for the built-in "Psiphon Tunnel" entry, chained behind sing-box
 
 Crate name `cipher_client`, edition 2024 (let-chains are used). README.md is the public overview: keep its
 feature list, "Not supported" list and layout table in sync when those change.
@@ -34,23 +35,28 @@ src/
   main.rs            mod decls + slint::include_modules!(); calls app::run()
   app.rs   (~1100 lines) UI glue: callbacks, threads, list refresh, connect/disconnect, settings, engines
   app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots` never connects: safe)
-  profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}},
+  profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name}},
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
-                     ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing)
+                     ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing,
+                     psiphon: PsiphonSettings {network: imported JSON map, region})
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
                      Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
   store.rs           Store persisted as state.json (atomic write, 0600; corrupt → .bak): settings, manual entries,
-                     subscriptions (with entries, usage, updated_at), selected id, next_id
+                     subscriptions (with entries, usage, updated_at), selected id, next_id;
+                     built-in entries (Psiphon, id PSIPHON_ID=0) come first in all_entries(), not saved, not removable
   engine.rs          Engine trait (start/stop/status/ready), EngineKind, Status, EngineError, engine_for()
   engine/process.rs  child process → log file; SIGTERM then kill after 5s; stops on Drop; last log line = error msg;
                      spawn_elevated: Linux Tunnel mode via `pkexec /bin/sh` wrapper, stopped by closing its stdin pipe
   engine/paths.rs    data_dir(), bin_dir(), find_binary() (beside exe → <data>/bin → PATH), write_private()
   engine/singbox.rs  SingBoxEngine: generate → write sing-box.json → `sing-box check` → `run`; Windows proxy reset
-  engine/singbox/generate.rs   build_config(profile, settings, data_dir) → SingBoxConfig (tags: proxy, direct, tun-in, mixed-in)
+  engine/singbox/generate.rs   build_config(profile, settings, data_dir, direct_processes) → SingBoxConfig (tags: proxy, direct, tun-in, mixed-in)
   engine/singbox/generate/routing.rs  routing rules → route rules + remote geo rule sets (SagerNet .srs via proxy) + DNS rules
   engine/singbox/config/       serde model of sing-box config (inbound/, outbound/, endpoint, dns, route, shared/{tls,transport,dial,multiplex,hysteria}, tests.rs)
+  engine/psiphon.rs  PsiphonEngine: psiphon-tunnel-core (as user, JSON notices → psiphon.log) then, once a `Tunnels` notice
+                     count ≥ 1, an inner SingBoxEngine with a socks outbound to it + process_name→direct rule; REGIONS
   engine/openvpn.rs  OpenVpnEngine: --cd/--config, Inline configs → temp <data>/openvpn.ovpn (0600, removed on stop), temp auth file for auth-user-pass, ready = "Initialization Sequence Completed", AUTH_FAILED detection
-  engine/install.rs  engine detection/versions; downloads pinned sing-box release (SHA-256 verified, 200MB cap) into <data>/bin
+  engine/install.rs  engine detection/versions; downloads pinned sing-box release and pinned Psiphon binary
+                     (psiphon-tunnel-core-binaries @ PSIPHON_COMMIT; SHA-256 verified) into <data>/bin
   import.rs          ImportError, decode_base64 (all variants), re-exports
   import/link.rs + link/*.rs   share links: vless, vmess, trojan, ss, hysteria2/hy2, tuic, anytls, wireguard/wg (tests in link/tests.rs);
                                ovpn/openvpn (base64 .ovpn + #name) is parsed in import/openvpn.rs
@@ -86,7 +92,8 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - **UI contract**: Rust owns data; UI only calls `AppState` callbacks. Adding a UI feature = property/callback in
   `state.slint` + handler in `app.rs` `bind_callbacks`.
 - **Runtime files** (`~/.local/share/cipher_client`, Windows `%APPDATA%\cipher_client`): state.json,
-  sing-box.json, sing-box.log, cache.db, openvpn.log, openvpn.ovpn + openvpn-auth.txt (temporary), bin/.
+  sing-box.json, sing-box.log, cache.db, openvpn.log, openvpn.ovpn + openvpn-auth.txt (temporary),
+  psiphon.json, psiphon.log, psiphon/ (its datastore), bin/.
 
 ## Key decisions / gotchas
 - TUN uses `stack: gvisor` (the default mixed stack broke TCP behind UFW). `strict_route`, `auto_route` on.
@@ -100,13 +107,17 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Git repo since 2026-10-18 (branch `master`, no remote). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
-## Status & history (as of 2026-10-25)
+## Status & history (as of 2026-10-26)
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 61 tests passing at last count (routing added 2026-10-25); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 67 tests passing at last count (Psiphon added 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
+- Psiphon (2026-10-26): unit tests + `sing-box check` of the chained config pass; the downloaded binary was never run
+  here (sandbox refused executing it), so `-version` parsing ("Revision:" line) and the whole connect are unverified.
+  No network config ships: the user imports one (Settings → Psiphon, or Configs → Import of a .json/.config with
+  PropagationChannelId). User plans to ask Psiphon Inc. for their own IDs.
 - Split tunneling / routing rules (2026-10-25): generator + `sing-box check` pass, UI rendered headlessly. User must verify
   real routing: app rules in Tunnel mode (process lookup as root), geo presets (rule-set download via proxy), whitelist default.
 - pkexec-per-connect (2026-10-18): user must confirm exactly 1 prompt per Tunnel connect, clean disconnect, OpenVPN tun0 creation.

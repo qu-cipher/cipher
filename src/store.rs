@@ -7,10 +7,23 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     path::PathBuf,
+    sync::LazyLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const FILE_NAME: &str = "state.json";
+
+/// Id of the built-in Psiphon entry. Stored ids start at 1.
+pub const PSIPHON_ID: u64 = 0;
+
+/// Entries the app always has. They aren't saved and can't be removed.
+static BUILTIN: LazyLock<[Entry; 1]> = LazyLock::new(|| {
+    [Entry { id: PSIPHON_ID, profile: Profile::Psiphon { name: "Psiphon Tunnel".into() } }]
+});
+
+pub fn is_builtin(id: u64) -> bool {
+    BUILTIN.iter().any(|e| e.id == id)
+}
 
 /// A profile with an id that stays stable across runs (used for selection).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,9 +167,9 @@ impl Store {
         self.all_entries().find(|(_, e)| e.id == id).map(|(_, e)| e)
     }
 
-    /// Every config with the subscription it belongs to (`None` = manual).
+    /// Every config with the subscription it belongs to (`None` = built-in or manual).
     pub fn all_entries(&self) -> impl Iterator<Item = (Option<&StoredSubscription>, &Entry)> {
-        let manual = self.manual.iter().map(|e| (None, e));
+        let manual = BUILTIN.iter().chain(&self.manual).map(|e| (None, e));
         let subscribed = self
             .subscriptions
             .iter()
@@ -226,6 +239,21 @@ mod tests {
         assert_eq!(store.selected, Some(ids[0]));
         store.remove_entry(ids[0]);
         assert_eq!(store.selected, None);
+    }
+
+    #[test]
+    fn psiphon_is_built_in() {
+        let mut store = Store::default();
+        let (source, entry) = store.all_entries().next().unwrap();
+        assert!(source.is_none() && entry.id == PSIPHON_ID && is_builtin(entry.id));
+        assert_eq!(entry.profile.protocol(), "psiphon");
+
+        store.selected = Some(PSIPHON_ID);
+        store.remove_entry(PSIPHON_ID);
+        assert!(store.entry(PSIPHON_ID).is_some());
+        assert_eq!(store.selected, Some(PSIPHON_ID));
+        assert!(store.entry_mut(PSIPHON_ID).is_none());
+        assert!(!serde_json::to_string(&store).unwrap().contains("Psiphon"));
     }
 
     #[test]

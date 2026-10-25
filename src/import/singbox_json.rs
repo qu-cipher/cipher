@@ -128,7 +128,7 @@ mod tests {
         for file in ["vless_reality.json", "hysteria2.json", "wireguard.json"] {
             for (i, profile) in parse_singbox_json(&fixture(file)).unwrap().profiles.iter().enumerate() {
                 let path = dir.join(format!("{file}-{i}.json"));
-                let config = build_config(profile, &Settings::default(), &dir).unwrap();
+                let config = build_config(profile, &Settings::default(), &dir, &[]).unwrap();
                 std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
                 if let Err(e) = check(&binary, &path) {
                     panic!("{file} / {}: {e}", profile.name());

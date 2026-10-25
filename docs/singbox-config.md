@@ -16,6 +16,8 @@ We only emit the 1.12+ formats: typed DNS servers, `domain_resolver`, `endpoints
 
 OpenVPN is not sing-box — it runs as its own process (`engine::openvpn`) and only supports Tunnel mode (`EngineError::TunnelOnly`).
 
+Psiphon is chained: sing-box runs in front of it in every mode (§10).
+
 ## 0. Where things live
 
 | Piece | Path |
@@ -271,3 +273,24 @@ cargo test -- --ignored     # also runs real `sing-box check` on generated confi
 ```
 
 A new fixture must survive deserialize → serialize unchanged. Only use modeled fields, and write list fields as arrays.
+
+## 10. Psiphon chaining (`src/engine/psiphon.rs`)
+
+The built-in *Psiphon Tunnel* entry (`Profile::Psiphon`, store id `PSIPHON_ID = 0`, never saved) runs two processes:
+
+1. **`psiphon-tunnel-core -config <data>/psiphon.json -dataRootDirectory <data>/psiphon`**, as the user.
+   - The config is the imported network JSON (`Settings.psiphon.network`) with `DataRootDirectory`, `LocalSocksProxyPort` (a free loopback port), `DisableLocalHTTPProxy: true` and `EgressRegion` (`Settings.psiphon.region`) set on top.
+   - Notices go to `psiphon.log` as JSON lines. The latest `Tunnels` notice with `count ≥ 1` means connected; the latest `Error` notice explains an exit.
+2. **sing-box, once Psiphon has a tunnel**, generated from `Profile::Proxy` with this outbound:
+   ```json
+   { "type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": <psiphon port>, "version": "5", "network": "tcp" }
+   ```
+   - `network: tcp`: Psiphon's SOCKS proxy doesn't forward UDP, so UDP fails fast. DNS still works, because `remote` is DoH (TCP).
+   - `build_config(…, direct_processes)` adds `{ "process_name": ["psiphon-tunnel-core"], "outbound": "direct" }` right after `hijack-dns`. In Tunnel mode, Psiphon's own connections would otherwise go into the TUN and back into Psiphon.
+
+Starting sing-box only after Psiphon connects means Psiphon's bootstrap (server list fetches, DNS) happens before the TUN exists. `PsiphonEngine::status()` drives this: `start_engine` polls it.
+- `authorized()` stays false until sing-box runs, so `PASSWORD_TIMEOUT` (120 s) covers Psiphon's first connection plus the pkexec dialog.
+- `CONNECT_TIMEOUT` starts after that.
+
+Binaries: `install::install_psiphon` downloads `Psiphon-Labs/psiphon-tunnel-core-binaries` at the pinned `PSIPHON_COMMIT` (Linux x86_64; Windows i686 only) into `<data>/bin/psiphon-tunnel-core`, checked against SHA-256. `-version` prints only a git revision, shown as `rev …`.
+
