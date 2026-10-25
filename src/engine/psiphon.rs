@@ -1,18 +1,11 @@
 //! Psiphon: the ConsoleClient (`psiphon-tunnel-core`) finds and connects to Psiphon servers on
-//! its own and serves a local SOCKS proxy. sing-box runs in front of it in every mode, with a
-//! `socks` outbound to that proxy, so Tunnel mode, the local proxy and routing rules work as usual.
-//!
-//! Start order: Psiphon first; sing-box once Psiphon reports a tunnel. Psiphon's own connections
-//! are routed direct by process name, or the TUN would send them back into Psiphon.
+//! its own and serves a local SOCKS proxy, with sing-box in front (see `engine::chain`).
 
-use crate::engine::{paths, process::Process, singbox::SingBoxEngine, Engine, EngineError, Status};
-use crate::engine::singbox::config::{
-    outbound::{Outbound, socks::SocksOutbound},
-    shared::Network,
-};
+use crate::engine::{chain::{self, Chain}, paths, process::Process, Engine, EngineError, Status};
+use crate::engine::singbox::config::shared::Network;
 use crate::profile::{Profile, Settings};
 use serde_json::{Map, Value};
-use std::{ffi::OsStr, fs, net::TcpListener, path::{Path, PathBuf}};
+use std::{ffi::OsStr, fs, path::Path};
 
 pub const BINARY: &str = "psiphon-tunnel-core";
 
@@ -92,36 +85,10 @@ fn last_error(log: &str) -> Option<String> {
         .and_then(|n| n["data"]["message"].as_str().map(str::to_owned))
 }
 
-/// A free loopback port for Psiphon's SOCKS proxy (sing-box owns the user-facing port).
-fn free_port() -> std::io::Result<u16> {
-    Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
-}
-
+/// Runs Psiphon with sing-box in front; sing-box starts once Psiphon reports a tunnel.
 #[derive(Default)]
 pub struct PsiphonEngine {
-    psiphon: Option<Process>,
-    log_path: PathBuf,
-    /// Started once Psiphon has a tunnel.
-    singbox: Option<SingBoxEngine>,
-    /// The sing-box side to start: a SOCKS profile pointing at Psiphon, and the settings.
-    pending: Option<(Profile, Settings)>,
-    /// Psiphon's process name, routed direct by sing-box.
-    process_name: String,
-}
-
-impl PsiphonEngine {
-    fn log(&self) -> String {
-        fs::read_to_string(&self.log_path).unwrap_or_default()
-    }
-
-    fn start_singbox(&mut self) -> Result<(), EngineError> {
-        let Some((profile, settings)) = self.pending.take() else { return Ok(()) };
-        let mut singbox = SingBoxEngine::default();
-        singbox.direct_processes = vec![self.process_name.clone()];
-        singbox.start(&profile, &settings)?;
-        self.singbox = Some(singbox);
-        Ok(())
-    }
+    chain: Option<Chain>,
 }
 
 impl Engine for PsiphonEngine {
@@ -138,76 +105,48 @@ impl Engine for PsiphonEngine {
         let data_dir = paths::data_dir()?;
         let data_root = data_dir.join("psiphon");
         fs::create_dir_all(&data_root)?;
-        let socks_port = free_port()?;
+        let socks_port = chain::free_port()?;
         let config_path = data_dir.join("psiphon.json");
         let config = client_config(network, &settings.psiphon.region, &data_root, socks_port);
         paths::write_private(&config_path, &serde_json::to_string_pretty(&config)?)?;
 
-        self.log_path = data_dir.join("psiphon.log");
-        self.process_name = binary.file_name().map_or(BINARY.into(), |n| n.to_string_lossy().into_owned());
-        self.psiphon = Some(Process::spawn(
+        let log_path = data_dir.join("psiphon.log");
+        let process = Process::spawn(
             "psiphon",
             &binary,
             [OsStr::new("-config"), config_path.as_os_str(), OsStr::new("-dataRootDirectory"), data_root.as_os_str()],
-            &self.log_path,
-        )?);
-
-        let outbound = Outbound::Socks(SocksOutbound {
-            tag: name.clone(),
-            server: "127.0.0.1".into(),
-            server_port: socks_port,
-            version: Some("5".into()),
-            // Psiphon's SOCKS proxy only forwards TCP: UDP fails fast instead of timing out.
-            network: Some(Network::Tcp),
-            ..Default::default()
-        });
-        self.pending = Some((Profile::Proxy { name: name.clone(), outbound }, settings.clone()));
+            &log_path,
+        )?;
+        // Psiphon's SOCKS proxy only forwards TCP: UDP fails fast instead of timing out.
+        self.chain = Some(Chain::new(process, log_path, &binary, name, socks_port, Some(Network::Tcp), settings));
         Ok(())
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
-        self.pending = None;
-        if let Some(mut singbox) = self.singbox.take() {
-            singbox.stop()?;
-        }
-        if let Some(mut psiphon) = self.psiphon.take() {
-            psiphon.stop()?;
-        }
-        Ok(())
+        self.chain.take().map_or(Ok(()), |mut chain| chain.stop())
     }
 
-    /// Also moves the start along: sing-box starts once Psiphon has a tunnel.
     fn status(&mut self) -> Status {
-        let Some(psiphon) = self.psiphon.as_mut() else { return Status::Stopped };
-        if let Status::Failed(reason) = psiphon.status() {
-            return Status::Failed(last_error(&self.log()).map_or(reason, |e| format!("psiphon exited: {e}")));
-        }
-        if self.pending.is_some() && tunnel_count(&self.log()) > 0 && let Err(e) = self.start_singbox() {
-            return Status::Failed(e.to_string());
-        }
-        self.singbox.as_mut().map_or(Status::Running, Engine::status)
+        let Some(chain) = self.chain.as_mut() else { return Status::Stopped };
+        chain.status(
+            |chain| tunnel_count(&chain.log()) > 0,
+            |log| last_error(log).map(|e| format!("psiphon exited: {e}")),
+        )
     }
 
     fn ready(&mut self) -> bool {
-        self.singbox.as_mut().is_some_and(Engine::ready)
+        self.chain.as_mut().is_some_and(Chain::ready)
     }
 
-    /// False until sing-box runs (Psiphon still connecting, or the admin password dialog is open).
     fn authorized(&mut self) -> bool {
-        self.singbox.as_mut().is_some_and(Engine::authorized)
-    }
-}
-
-impl Drop for PsiphonEngine {
-    fn drop(&mut self) {
-        let _ = self.stop();
+        self.chain.as_mut().is_some_and(Chain::authorized)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::singbox::generate::build_config;
+    use crate::engine::singbox::{config::outbound::{Outbound, socks::SocksOutbound}, generate::build_config};
 
     const NETWORK: &str = r#"{
         "PropagationChannelId": "FFFFFFFFFFFFFFFF",

@@ -1,5 +1,6 @@
 use crate::profile::{Profile, Settings};
 
+pub mod chain;
 pub mod install;
 pub mod paths;
 pub mod process;
