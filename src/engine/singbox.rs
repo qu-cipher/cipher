@@ -1,6 +1,6 @@
-use crate::engine::{paths, process::{Process, hide_console}, Engine, EngineError, Status};
+use crate::engine::{elevated::Elevated, paths, process::{Process, hide_console}, Assist, Engine, EngineError, Status};
 use crate::profile::{ConnectionMode, Profile, Settings};
-use std::{ffi::OsStr, path::Path, process::Command};
+use std::{ffi::{OsStr, OsString}, path::Path, process::Command, sync::Arc};
 
 pub mod config;
 pub mod generate;
@@ -19,6 +19,8 @@ pub struct SingBoxEngine {
     system_proxy: bool,
     /// Process names whose traffic always goes direct (a chained engine's own connections).
     pub direct_processes: Vec<String>,
+    /// A root plugin's admin helper: in Tunnel mode sing-box runs in it too (one password prompt).
+    pub elevated: Option<Arc<Elevated>>,
 }
 
 impl Engine for SingBoxEngine {
@@ -43,7 +45,13 @@ impl Engine for SingBoxEngine {
             if !cache.exists() {
                 std::fs::File::create(&cache)?;
             }
-            Process::spawn_elevated("sing-box", &binary, args, &log_path)?
+            match &self.elevated {
+                Some(helper) => {
+                    let args: Vec<OsString> = args.iter().map(|a| a.to_os_string()).collect();
+                    Process::spawn_in(helper, "sing-box", &binary, &args, &log_path)?
+                }
+                None => Process::spawn_elevated("sing-box", &binary, args, &log_path)?,
+            }
         } else {
             Process::spawn("sing-box", &binary, args, &log_path)?
         });
@@ -67,6 +75,11 @@ impl Engine for SingBoxEngine {
 
     fn authorized(&mut self) -> bool {
         self.process.as_ref().is_some_and(Process::authorized)
+    }
+
+    fn assist(&mut self, assist: Assist) {
+        self.direct_processes.extend(assist.direct_processes);
+        self.elevated = assist.elevated;
     }
 }
 

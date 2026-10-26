@@ -198,7 +198,7 @@ fn make_executable(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn download(url: &str, to: &Path) -> Result<(), EngineError> {
+pub(crate) fn download(url: &str, to: &Path) -> Result<(), EngineError> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(20)))
         .build()
@@ -213,7 +213,16 @@ fn download(url: &str, to: &Path) -> Result<(), EngineError> {
     Ok(())
 }
 
-fn verify_sha256(path: &Path, expected: &str) -> Result<(), EngineError> {
+pub(crate) fn verify_sha256(path: &Path, expected: &str) -> Result<(), EngineError> {
+    if file_sha256(path)? == expected.to_ascii_lowercase() {
+        Ok(())
+    } else {
+        Err(EngineError::Install("the download is corrupted (checksum mismatch)".into()))
+    }
+}
+
+/// Lowercase hex SHA-256 of a file.
+pub(crate) fn file_sha256(path: &Path) -> Result<String, EngineError> {
     let mut context = ring::digest::Context::new(&ring::digest::SHA256);
     let mut file = File::open(path)?;
     let mut buffer = [0u8; 64 * 1024];
@@ -224,13 +233,7 @@ fn verify_sha256(path: &Path, expected: &str) -> Result<(), EngineError> {
         }
         context.update(&buffer[..read]);
     }
-    let actual: String = context.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect();
-
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(EngineError::Install("the download is corrupted (checksum mismatch)".into()))
-    }
+    Ok(context.finish().as_ref().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Unpacks the release archive (it holds one `sing-box-<version>-<platform>/` folder)

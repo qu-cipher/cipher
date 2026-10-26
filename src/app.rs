@@ -8,6 +8,7 @@ use crate::engine::{self, Engine, EngineError, Status, install, openvpn, paths, 
 use crate::engine::singbox::config::log::LogLevel;
 use crate::import::{self, ImportError};
 use crate::engine::singbox::generate::PROXY_LISTEN;
+use crate::plugin::TransportUse;
 use crate::profile::{ConnectionMode, Credentials, Profile, Settings};
 use crate::routing::{Preset, Rule, RuleKind, Routing, Target};
 use crate::store::{self, Store};
@@ -36,10 +37,12 @@ const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
 /// Same order as `cores` in the UI.
 const CORES: [xray::Core; 2] = [xray::Core::SingBox, xray::Core::Xray];
 /// Order of the groups in the grouped Configs list (`Profile::group`).
-const GROUP_ORDER: [&str; 15] = [
+const GROUP_ORDER: [&str; 16] = [
     "VLESS", "VMess", "Trojan", "Shadowsocks", "Hysteria2", "TUIC", "AnyTLS", "WireGuard", "OpenVPN", "Psiphon",
-    "SOCKS", "HTTP", "Direct", "Selector", "URLTest",
+    "Plugins", "SOCKS", "HTTP", "Direct", "Selector", "URLTest",
 ];
+/// Index of the Settings tab (`tabs` in library-panel.slint).
+const SETTINGS_TAB: i32 = 3;
 const STARTUP_GRACE: Duration = Duration::from_millis(1500);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(45);
 /// How long the admin password dialog may stay open (for Psiphon: also its first connection).
@@ -78,6 +81,10 @@ struct Shared {
     notice_seq: AtomicU64,
     /// The config the sign-in dialog is for, and whether to connect after it.
     credentials_for: Mutex<Option<(u64, bool)>>,
+    /// The plugin the add dialog reviewed, waiting for "Install".
+    plugin_review: Mutex<Option<crate::plugin::install::Review>>,
+    /// What the plugin fields dialog edits.
+    fields_target: Mutex<Option<plugins::FieldsTarget>>,
 }
 
 type Ctx = Arc<Shared>;
@@ -112,6 +119,8 @@ fn init(ui: &AppWindow) -> (Ctx, Timer) {
         updating: Mutex::new(HashSet::new()),
         notice_seq: AtomicU64::new(0),
         credentials_for: Mutex::new(None),
+        plugin_review: Mutex::new(None),
+        fields_target: Mutex::new(None),
     });
 
     bind_window(ui);
@@ -119,6 +128,7 @@ fn init(ui: &AppWindow) -> (Ctx, Timer) {
     load_settings(ui, &ctx);
     refresh_routing(ui, &ctx);
     refresh_all(ui, &ctx);
+    plugins::refresh_plugins(ui, &ctx);
     refresh_engines(ui, &ctx);
 
     // Watches the running engine and ticks the uptime clock.
@@ -163,7 +173,10 @@ macro_rules! on {
     }};
 }
 
+mod plugins;
+
 fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
+    plugins::bind(ui, ctx);
     on!(ui, ctx, on_toggle_connection, |ui, ctx| toggle_connection(&ui, ctx));
     on!(ui, ctx, on_mode_changed, |ui, ctx| {
         settings_changed(&ui, ctx);
@@ -386,6 +399,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
         }
         None => state.set_selected_id(-1),
     }
+    plugins::refresh_transport(&state, &store);
 }
 
 /// Sorts rows into protocol groups, each under a heading row; collapsed groups keep only the heading.
@@ -851,10 +865,10 @@ fn toggle_connection(ui: &AppWindow, ctx: &Ctx) {
 
 /// Starts the selected config, stopping whatever runs first (so it also reconnects).
 fn connect(ui: &AppWindow, ctx: &Ctx) {
-    let (id, profile, settings) = {
+    let (id, profile, transport, settings) = {
         let store = ctx.store.lock().unwrap();
         match store.selected.and_then(|id| store.entry(id)) {
-            Some(entry) => (entry.id, entry.profile.clone(), store.settings.clone()),
+            Some(entry) => (entry.id, entry.profile.clone(), entry.transport.clone(), store.settings.clone()),
             None => {
                 drop(store);
                 notify(ui, ctx, "Select a config first", false);
@@ -883,7 +897,7 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
             let _ = previous.stop();
         }
 
-        let result = start_engine(&profile, &settings, &ctx.cancel);
+        let result = start_engine(&profile, transport, &settings, &ctx.cancel);
         let result = result.map(|engine| *ctx.engine.lock().unwrap() = Some(engine));
         let proxy_address = match settings.serves_proxy() && profile.engine_kind().runs_singbox() {
             true => format!("{PROXY_LISTEN}:{}", settings.proxy_port),
@@ -902,7 +916,7 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
             Err(reason) => {
                 set_state(ui, ctx, ConnectionState::Disconnected);
                 if reason.contains("Settings → Engines") {
-                    ui.global::<AppState>().set_current_tab(2);
+                    ui.global::<AppState>().set_current_tab(SETTINGS_TAB);
                 }
                 if reason != CANCELLED {
                     ui.global::<AppState>().set_error(reason.into());
@@ -913,8 +927,16 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
 }
 
 /// Starts an engine and waits until it is up, has failed, or the user cancelled.
-fn start_engine(profile: &Profile, settings: &Settings, cancel: &AtomicBool) -> Result<Box<dyn Engine + Send>, String> {
+fn start_engine(
+    profile: &Profile,
+    transport: Option<TransportUse>,
+    settings: &Settings,
+    cancel: &AtomicBool,
+) -> Result<Box<dyn Engine + Send>, String> {
     let mut engine = engine::engine_for(profile.engine_kind());
+    if let Some(transport) = transport {
+        engine = Box::new(engine::plugin::Transported::new(engine, transport));
+    }
     engine.start(profile, settings).map_err(|e| explain(e.to_string()))?;
 
     // The grace period and timeout start once the admin password was accepted.

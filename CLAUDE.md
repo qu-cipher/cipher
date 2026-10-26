@@ -69,9 +69,22 @@ src/
   engine/psiphon.rs  PsiphonEngine: psiphon-tunnel-core (as user, JSON notices → psiphon.log) then, once a `Tunnels` notice
                      count ≥ 1, an inner SingBoxEngine with a socks outbound to it + process_name→direct rule;
                      client_config: ServerEntry → TargetServerEntry + DisableRemoteServerListFetcher; Network → as imported
+  engine/plugin.rs   PluginEngine (Profile::Plugin: plugin serves SOCKS on a free port → Chain to sing-box) and
+                     Transported (wraps any engine: plugin first, then the config rewritten to 127.0.0.1:<port>; rewrite() keeps
+                     tls.server_name / ws Host / Xray serverName+host on the ORIGINAL server). e2e tests (ignored) use sing-box as fake plugins
+  engine/elevated.rs Elevated: one pkexec for several root processes: `cipher_client --elevated-helper` (main.rs) runs as root,
+                     JSON lines over stdin/stdout (spawn/stop → exited), stdin EOF stops all. Only used when a plugin needs_root;
+                     SingBoxEngine.elevated / Assist{elevated, direct_processes} let sing-box's TUN join it. Plain Tunnel mode is unchanged
   engine/openvpn.rs  OpenVpnEngine: --cd/--config, Inline configs → temp <data>/openvpn.ovpn (0600, removed on stop), temp auth file for auth-user-pass, ready = "Initialization Sequence Completed", AUTH_FAILED detection
   engine/install.rs  engine detection/versions; downloads pinned sing-box + Xray (XRAY_VERSION zip, `zip` crate) releases and pinned Psiphon binary
                      (psiphon-tunnel-core-binaries @ PSIPHON_COMMIT; SHA-256 verified) into <data>/bin
+  plugin.rs          Manifest (plugin.json, deny_unknown_fields, validate(): GitHub repo, asset URLs under <repo>/releases/download/,
+                     sha256, placeholders `{name}`/`{name:json}`, other braces literal), fields, Installed/InstallRecord
+                     (<data>/plugins/<id>/{plugin.json,install.json,cipher-plugin-<id>}), TransportUse, scheme registry (global, for
+                     link.rs), OFFICIAL (pinned, empty for now). Public dev guide: docs/plugins.md
+  plugin/install.rs  review() (fetch manifest: URL, GitHub repo → raw HEAD/plugin.json, or local file; GitHub API: public + license
+                     spdx match; archived = warning), install() (download, sha256, extract zip/tar, swap folder), remove();
+                     CIPHER_PLUGIN_DEV=1 = local folder binary, no checks ("Development")
   import.rs          ImportError, decode_base64 (all variants), re-exports
   import/link.rs + link/*.rs   share links: vless, vmess, trojan, ss, hysteria2/hy2, tuic, anytls, wireguard/wg (tests in link/tests.rs);
                                ovpn/openvpn (base64 .ovpn + #name) is parsed in import/openvpn.rs
@@ -113,10 +126,14 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   `kcpSettings.header` still accepted by 26.10.21 (no `mkcp-legacy` migration needed yet).
 - **Latency test**: TCP connect (3s, 16 workers) to `Profile::tcp_endpoint()`; UDP protocols skipped.
 - **UI contract**: Rust owns data; UI only calls `AppState` callbacks. Adding a UI feature = property/callback in
-  `state.slint` + handler in `app.rs` `bind_callbacks`.
+  `state.slint` + handler in `app.rs` `bind_callbacks` (plugin UI handlers: `app/plugins.rs`).
+- **Plugins** (tab index 2; Settings is 3 = `SETTINGS_TAB`): Entry.transport (per config, kept across subscription updates by
+  name) → `start_engine` wraps the engine in `Transported`. Engine plugins → Profile::Plugin (group "Plugins"; links in claimed
+  schemes via `plugin::scheme_owner` in link.rs). Root plugins need `record.root_allowed` (asked at install or "Allow admin").
+  Tests: `paths::TEST_DATA_DIR` (thread-local) keeps plugin tests out of the real data dir.
 - **Runtime files** (`~/.local/share/cipher_client`, Windows `%APPDATA%\cipher_client`): state.json,
   sing-box.json, sing-box.log, cache.db, openvpn.log, openvpn.ovpn + openvpn-auth.txt (temporary),
-  xray.json, xray.log, psiphon.json, psiphon.log, psiphon/ (its datastore), bin/.
+  xray.json, xray.log, psiphon.json, psiphon.log, psiphon/ (its datastore), bin/, plugins/<id>/, plugin-<id>.log.
 
 ## Key decisions / gotchas
 - TUN uses `stack: gvisor` (the default mixed stack broke TCP behind UFW). `strict_route`, `auto_route` on.
@@ -136,10 +153,14 @@ v0.3.0 = Xray core + anti-DPI toggles (TLS fragment, UDP noise). Next-version id
 Maybe later: built-in public VPN servers for general use (user's idea, not planned yet).
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 85 tests passing (+8 ignored) at last count (own-server Psiphon 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 97 tests passing (+10 ignored) at last count (plugin system 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
+- Plugin system (2026-10-26, uncommitted at first): unit + e2e tests (sing-box as fake engine/transport plugins, root path via an
+  in-process helper) pass; real `--elevated-helper` mode checked over stdin without pkexec. NOT yet verified: a real pkexec prompt
+  with a root plugin (one prompt for plugin + TUN), real GitHub install of a published plugin, Windows. No official plugins yet
+  (MasterDnsVPN first, then sni-spoofing-rust; see docs/plugins-plan.md, private).
 - Xray (2026-10-26): link parsing, converter and 10 config shapes pass the real `xray run -test` (v2rayN's 26.9.9);
   chained sing-box config passes `sing-box check`. Real connections (XHTTP etc.) are for the user to verify.
 - Anti-DPI (2026-10-26): configs validated by both engines; whether fragmenting/noise actually helps on real networks is unverified.
@@ -153,7 +174,7 @@ Pending / unverified:
   First OpenVPN test (ovpn:// link) got through TLS + PUSH_REPLY, then failed creating tun0 unprivileged; that's what this fixes.
 - OpenVPN pushed DNS: now root, so OpenVPN 2.7's own DNS handling may apply it; unverified.
 - Windows: builds and passes `cargo test` in CI (v0.2.0 release, MSVC), but has never been run on a real Windows machine.
-  Local cross-check (`--target x86_64-pc-windows-gnu`) still fails in `ring` without MinGW.
+  Local `cargo check --tests --target x86_64-pc-windows-gnu` passes now (2026-10-26).
 
 Known unsupported (rejected on import with a clear reason): AmneziaWG, ShadowTLS links, Clash YAML subscriptions.
 Xray 26 limits (checked with `xray run -test`): no `allowInsecure`, no plain VLESS/Trojan to public addresses, no h2/QUIC.

@@ -1,0 +1,64 @@
+import { ListView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { PillButton } from "../components/buttons.slint";
+import { PluginItem } from "../components/plugin-item.slint";
+
+// Installed plugins: transports (run under a config) and engines (their own configs).
+export component PluginsPanel inherits VerticalLayout {
+    spacing: 8px;
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        PillButton {
+            text: "Add plugin";
+            icon: @image-url("../../assets/icons/MdiPlus.svg");
+            primary: true;
+            clicked => {
+                AppState.plugin-dialog-error = "";
+                AppState.plugin-dialog-open = true;
+            }
+        }
+
+        Rectangle { horizontal-stretch: 1; }
+
+        PillButton {
+            text: "Developer guide";
+            clicked => { AppState.open-url("https://github.com/qu-cipher/cipher/blob/master/docs/plugins.md"); }
+        }
+    }
+
+    if AppState.plugin-dev-mode: Text {
+        text: "Developer mode: local plugin folders can be added without the release checks.";
+        font-size: 11px;
+        color: Theme.connecting;
+        wrap: word-wrap;
+    }
+
+    if AppState.plugins.length == 0: Text {
+        vertical-stretch: 1;
+        text: "No plugins yet.\nPlugins add transports (like DNS tunnels) under your configs,\nor whole VPN engines with their own configs.";
+        font-size: 13px;
+        color: Theme.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    if AppState.plugins.length > 0: ListView {
+        vertical-stretch: 1;
+
+        for plugin in AppState.plugins: VerticalLayout {
+            padding-bottom: 6px;
+
+            PluginItem {
+                data: plugin;
+                open-repository => { AppState.open-url(plugin.repository); }
+                new-config => { AppState.new-plugin-config(plugin.id); }
+                allow-root => { AppState.allow-plugin-root(plugin.id); }
+                revoke-root => { AppState.revoke-plugin-root(plugin.id); }
+                remove => { AppState.remove-plugin(plugin.id); }
+            }
+        }
+    }
+}

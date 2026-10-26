@@ -51,7 +51,13 @@ for an existing engine, and runs that engine as a child process:
 - **Anti-DPI options** (*Settings → Anti-DPI*): **Fragment TLS hello** splits the TLS handshake into small,
   delayed pieces so filters can't read the server name (TCP configs on sing-box and Xray). **UDP noise**
   sends random packets before an mKCP connection (Xray).
-- **Configs grouped by protocol** (VLESS, Trojan, …, Psiphon); groups fold, and the
+- **Plugins** (*Plugins* tab): add **transports** that carry a config's traffic another way (DNS tunnels,
+  SNI spoofing, …; picked per config under the selected config) and whole **VPN engines** with their own
+  configs and link schemes. Plugins are separate open-source programs: Cipher only installs them from a public
+  GitHub repository's releases, with a recognized license and SHA-256 checksums, and warns before adding one.
+  Plugins that need admin rights must be allowed separately, and still share Tunnel mode's single password
+  prompt. Writing one: [docs/plugins.md](docs/plugins.md).
+- **Configs grouped by protocol** (VLESS, Trojan, …, Psiphon, Plugins); groups fold, and the
   grouping toggles from the Configs toolbar.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
   (DNS-over-HTTPS through the tunnel).
@@ -158,17 +164,19 @@ artifacts. Engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app download
 | `src/main.rs` | Entry point. Calls `app::run()` |
 | `src/app.rs` | Glue between the UI and everything else: callbacks, background threads, connecting, latency tests |
 | `src/app/screenshots.rs` | Headless Slint platform for the UI test |
-| `src/profile.rs` | `Profile` (Proxy / WireGuard / OpenVPN), `ConnectionMode`, `Settings` |
+| `src/profile.rs` | `Profile` (Proxy / WireGuard / OpenVPN / Psiphon / Xray / Plugin), `ConnectionMode`, `Settings` |
 | `src/routing.rs` | Routing rules, presets and the default route; input parsing and normalization |
 | `src/store.rs` | Saved state (`state.json`): configs, subscriptions, selection, settings |
 | `src/import/` | Share-link parsers (one file per protocol in `link/`), WireGuard/OpenVPN files, Psiphon server entries and configs, subscriptions, sing-box JSON |
-| `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Xray (`xray.rs`, `xray/`) and Psiphon engines chained behind sing-box (`chain.rs`) |
+| `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Xray (`xray.rs`, `xray/`) and Psiphon engines chained behind sing-box (`chain.rs`), plugin engines and transports (`plugin.rs`), the admin helper for root plugins (`elevated.rs`) |
+| `src/plugin.rs`, `src/plugin/` | Plugin manifests (validation, placeholders), installed plugins, and installing them (GitHub checks, download, SHA-256) |
 | `src/engine/singbox/config/` | Typed serde model of the sing-box config (client-side subset, 1.12+ format only) |
 | `src/engine/singbox/generate.rs` | Builds the sing-box config from a profile and settings (routing rules in `generate/routing.rs`) |
 | `ui/state.slint` | `AppState`: every property and callback shared between Rust and the UI |
 | `ui/main-window.slint`, `ui/panels/`, `ui/components/` | The window, its panels and reusable widgets |
 | `tests/fixtures/` | sing-box JSON that must survive deserialize → serialize unchanged |
 | `docs/singbox-config.md` | **Detailed guide to the generated sing-box config** and why each part is there |
+| `docs/plugins.md` | **Plugin developer guide**: the manifest, what a plugin must do, root plugins, testing and publishing |
 | `windows/` | Manifest that asks for admin rights, embedded by `build.rs` |
 
 ### Things worth reading if you're here to learn
@@ -202,6 +210,8 @@ Linux `~/.local/share/cipher_client/`, Windows `%APPDATA%\cipher_client\`:
 | `psiphon.json` / `psiphon.log` / `psiphon/` | Generated Psiphon client config, its notices (JSON lines), and its data store |
 | `xray.json` / `xray.log` | The last generated Xray config and its log |
 | `bin/` | sing-box, Xray and Psiphon downloaded by the app |
+| `plugins/<id>/` | An installed plugin: its `plugin.json`, `install.json` (source, checksum, admin rights allowed) and program; `data/` is the plugin's own folder |
+| `plugin-<id>.log` | A plugin's output |
 
 ## License
 

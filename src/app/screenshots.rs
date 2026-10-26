@@ -208,7 +208,7 @@ fn start() -> (AppWindow, Ctx, Timer, Driver) {
 fn routing_screenshots() {
     let (ui, _ctx, _monitor, d) = start();
     let state = ui.global::<AppState>();
-    state.set_current_tab(2);
+    state.set_current_tab(3);
     d.shot("r01-settings");
     state.set_core(1);
     state.invoke_settings_changed();
@@ -282,13 +282,83 @@ fn routing_screenshots() {
     state.set_group_configs(false);
     state.invoke_grouping_changed();
     d.shot("r14-ungrouped");
-    state.set_current_tab(2);
+    state.set_current_tab(3);
 
     // Scrolled down to the rule list.
     d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: -300.0 });
     d.shot("r07-rules-scrolled");
     d.hover(600.0, 330.0);
     d.shot("r08-rule-hover");
+    d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: 1000.0 });
+
+    plugin_frames(&ui, &_ctx, &d);
+}
+
+/// The Plugins tab with installed (fake) plugins, the add review, a settings form and the
+/// transport picker. Nothing runs: the plugin programs are empty files.
+fn plugin_frames(ui: &AppWindow, ctx: &Ctx, d: &Driver) {
+    use crate::plugin::{InstallRecord, MANIFEST_FILE, binary_name, plugins_dir, save_record};
+    let state = ui.global::<AppState>();
+    let data = paths::data_dir().unwrap();
+    let mut transport = crate::plugin::tests::transport();
+    transport.description = "Carries TCP configs through DNS queries to your own server.".into();
+    let engine = crate::plugin::tests::engine();
+    for (manifest, official, root_allowed) in [(&transport, true, false), (&engine, false, false)] {
+        let dir = plugins_dir(&data).join(&manifest.id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(binary_name(manifest)), "").unwrap();
+        std::fs::write(dir.join(MANIFEST_FILE), serde_json::to_string(manifest).unwrap()).unwrap();
+        let record = InstallRecord { source: "test".into(), sha256: String::new(), official, root_allowed, development: false };
+        save_record(&data, &manifest.id, &record).unwrap();
+    }
+    plugins::refresh_plugins(ui, ctx);
+    state.set_current_tab(2);
+    d.shot("p01-plugins");
+    assert_eq!(state.get_plugins().row_count(), 2);
+
+    // The review step of the add dialog, as `review_plugin` fills it in.
+    state.set_plugin_review(plugins::plugin_data_for_tests(&engine));
+    let warnings = ModelRc::new(VecModel::from(vec![SharedString::from("The repository is archived: the plugin is no longer maintained.")]));
+    state.set_plugin_review_warnings(warnings);
+    state.set_plugin_review_ready(true);
+    state.set_plugin_dialog_open(true);
+    d.pump(300);
+    d.shot("p02-add-review");
+    state.set_plugin_dialog_open(false);
+    state.set_plugin_review_ready(false);
+
+    // Allowing admin rights later asks first.
+    state.invoke_allow_plugin_root("myproto".into());
+    d.pump(300);
+    d.shot("p03-allow-admin");
+    state.invoke_allow_plugin_root("myproto".into());
+    assert!(state.get_plugins().iter().any(|p| p.id == "myproto" && p.root_allowed));
+
+    // A transport's settings for a config, then the picker under the selected config.
+    state.set_current_tab(1);
+    let trojan = state.get_configs().iter().find(|c| c.name == "Trojan A").unwrap();
+    state.invoke_select_config(trojan.id);
+    assert!(state.get_transport_available());
+    state.set_selected_transport(1);
+    state.invoke_transport_changed();
+    d.pump(300);
+    d.shot("p04-transport-fields");
+    let fields = state.get_fields_dialog_fields();
+    let domain = fields.iter().position(|f| f.key == "domain").unwrap();
+    state.invoke_edit_field(domain as i32, "t.example.com".into());
+    state.invoke_save_fields();
+    d.pump(300);
+    d.shot("p05-transport-picked");
+    let transport = ctx.store.lock().unwrap().entry(trojan.id as u64).and_then(|e| e.transport.clone());
+    assert_eq!(transport.unwrap().fields["domain"], "t.example.com");
+
+    // A new config for the engine plugin.
+    state.set_current_tab(2);
+    state.invoke_new_plugin_config("myproto".into());
+    state.set_fields_dialog_name("Home server".into());
+    state.invoke_save_fields();
+    assert!(state.get_configs().iter().any(|c| c.name == "Home server"));
+    d.shot("p06-engine-config");
 }
 
 #[test]

@@ -40,6 +40,10 @@ export global Theme {
         if protocol == "wg" { return #a3e635; }
         if protocol == "ovpn" { return #fcd34d; }
         if protocol == "psiphon" { return #4ade80; }
+        if protocol == "plugin" || protocol == "engine" || protocol == "transport" { return #94a3b8; }
+        if protocol == "official" { return root.accent; }
+        if protocol == "development" || protocol == "admin: not allowed" { return root.danger; }
+        if protocol == "admin" { return root.connecting; }
         return #8a96a8;
     }
 

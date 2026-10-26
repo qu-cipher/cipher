@@ -2,6 +2,7 @@
 
 use crate::engine::paths;
 use crate::import::{Subscription, Usage};
+use crate::plugin::TransportUse;
 use crate::profile::{Profile, PsiphonSource, Settings};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -17,6 +18,9 @@ const FILE_NAME: &str = "state.json";
 pub struct Entry {
     pub id: u64,
     pub profile: Profile,
+    /// A transport plugin this config runs through (see `crate::plugin`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<TransportUse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +104,7 @@ impl Store {
     }
 
     fn entries_from(&mut self, profiles: Vec<Profile>) -> Vec<Entry> {
-        profiles.into_iter().map(|profile| Entry { id: self.next_id(), profile }).collect()
+        profiles.into_iter().map(|profile| Entry { id: self.next_id(), profile, transport: None }).collect()
     }
 
     /// Adds manual configs and returns their ids.
@@ -127,12 +131,17 @@ impl Store {
     }
 
     /// Replaces a subscription's configs. If the selected config came from it, the selection
-    /// moves to the new config with the same name (servers usually keep their names).
+    /// moves to the new config with the same name (servers usually keep their names); so do
+    /// the transports chosen for its configs.
     pub fn update_subscription(&mut self, id: u64, content: Subscription) {
         let Some(index) = self.subscriptions.iter().position(|s| s.id == id) else { return };
-        let entries = self.entries_from(content.profiles);
+        let mut entries = self.entries_from(content.profiles);
 
         let subscription = &mut self.subscriptions[index];
+        for entry in &mut entries {
+            let old = subscription.entries.iter().find(|e| e.profile.name() == entry.profile.name());
+            entry.transport = old.and_then(|e| e.transport.clone());
+        }
         let selected_name = self
             .selected
             .and_then(|sel| subscription.entries.iter().find(|e| e.id == sel))
@@ -235,6 +244,25 @@ mod tests {
 
         store.update_subscription(sub, subscription(&["US"]));
         assert_eq!(store.selected, None);
+    }
+
+    #[test]
+    fn update_keeps_transports_by_name() {
+        let mut store = Store::default();
+        let id = store.add_subscription("https://s.example.com", subscription(&["A", "B"]));
+        let transport = TransportUse { plugin: "dns-tunnel".into(), fields: [("domain".into(), "t.example.com".into())].into() };
+        store.subscriptions[0].entries[1].transport = Some(transport.clone());
+
+        store.update_subscription(id, subscription(&["B", "C"]));
+        let entries = &store.subscriptions[0].entries;
+        assert_eq!(entries[0].transport, Some(transport));
+        assert_eq!(entries[1].transport, None);
+
+        // Saved with the config; old state without the field loads.
+        let json = serde_json::to_string(&store).unwrap();
+        assert!(json.contains("dns-tunnel"));
+        let old: Entry = serde_json::from_str(r#"{ "id": 1, "profile": { "kind": "psiphon", "name": "P", "server_entry": "ab" } }"#).unwrap();
+        assert_eq!(old.transport, None);
     }
 
     #[test]

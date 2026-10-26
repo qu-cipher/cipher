@@ -3,7 +3,7 @@
 //! Xray only runs the proxy (SOCKS inbound → one outbound); sing-box sits in front of it for
 //! TUN, the local/system proxy and routing rules (see `engine::chain`).
 
-use crate::engine::{chain::{self, Chain}, paths, process::{Process, hide_console}, Engine, EngineError, Status};
+use crate::engine::{chain::{self, Chain}, paths, process::{Process, hide_console}, Assist, Engine, EngineError, Status};
 use crate::engine::singbox::generate::{DIRECT_TAG, PROXY_TAG, PROXY_LISTEN};
 use crate::engine::singbox::config::log::LogLevel;
 use crate::profile::{Profile, Settings};
@@ -124,6 +124,7 @@ fn listening(port: u16) -> bool {
 #[derive(Default)]
 pub struct XrayEngine {
     chain: Option<Chain>,
+    assist: Assist,
 }
 
 impl Engine for XrayEngine {
@@ -144,7 +145,7 @@ impl Engine for XrayEngine {
 
         let log_path = data_dir.join("xray.log");
         let process = Process::spawn("xray", &binary, ["run".as_ref(), "-c".as_ref(), config_path.as_os_str()], &log_path)?;
-        self.chain = Some(Chain::new(process, log_path, &binary, name, socks_port, None, settings));
+        self.chain = Some(Chain::new(process, log_path, &binary, name, socks_port, None, settings, self.assist.clone()));
         Ok(())
     }
 
@@ -163,6 +164,10 @@ impl Engine for XrayEngine {
 
     fn authorized(&mut self) -> bool {
         self.chain.as_mut().is_some_and(Chain::authorized)
+    }
+
+    fn assist(&mut self, assist: Assist) {
+        self.assist = assist;
     }
 }
 

@@ -44,8 +44,21 @@ pub fn parse_link(link: &str) -> Result<Profile, ImportError> {
         "tuic" => tuic::parse(&ShareLink::parse(link)?),
         "anytls" => anytls::parse(&ShareLink::parse(link)?),
         "wireguard" | "wg" => wireguard::parse(&ShareLink::parse(link)?),
-        other => Err(ImportError::UnsupportedScheme(other.into())),
+        other => match crate::plugin::scheme_owner(other) {
+            Some(plugin) => Ok(plugin_link(link, plugin)),
+            None => Err(ImportError::UnsupportedScheme(other.into())),
+        },
     }
+}
+
+/// A link for an engine plugin: kept whole (the plugin parses it), named after its `#fragment`.
+fn plugin_link(link: &str, plugin: String) -> Profile {
+    let name = link
+        .rsplit_once('#')
+        .map(|(_, fragment)| crate::import::uri::decode(fragment).trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("{plugin} config"));
+    Profile::Plugin { name, plugin, link: Some(link.to_owned()), fields: Default::default() }
 }
 
 pub(crate) fn proxy(name: String, outbound: Outbound) -> Profile {

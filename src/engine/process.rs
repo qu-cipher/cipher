@@ -1,10 +1,11 @@
-use crate::engine::Status;
+use crate::engine::{Status, elevated::{Elevated, MemberStatus}};
 use std::{
     ffi::OsStr,
     fs::{self, File},
     io,
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
+    sync::Arc,
 };
 
 /// Written to the log by the root wrapper once the admin password was accepted.
@@ -31,15 +32,18 @@ exit "$code"
 /// A child process whose stdout/stderr go to a log file.
 /// The process is stopped when this is dropped, so closing the app never leaves a tunnel up.
 pub struct Process {
-    name: &'static str,
-    child: Child,
+    name: String,
+    /// `None` when the process runs inside the shared admin helper (`helper`).
+    child: Option<Child>,
     log_path: PathBuf,
     /// Started through pkexec: runs as root and is stopped by closing its stdin.
     elevated: bool,
+    /// Run by the admin helper (one password prompt for several root processes), with its id there.
+    helper: Option<(Arc<Elevated>, u32)>,
 }
 
 impl Process {
-    pub fn spawn<I, S>(name: &'static str, program: &Path, args: I, log_path: &Path) -> io::Result<Self>
+    pub fn spawn<I, S>(name: &str, program: &Path, args: I, log_path: &Path) -> io::Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -55,12 +59,18 @@ impl Process {
 
         hide_console(&mut command);
 
-        Ok(Self { name, child: command.spawn()?, log_path: log_path.to_owned(), elevated: false })
+        Ok(Self { name: name.into(), child: Some(command.spawn()?), log_path: log_path.to_owned(), elevated: false, helper: None })
+    }
+
+    /// Runs as root inside the shared admin helper (see `engine::elevated`).
+    pub fn spawn_in(helper: &Arc<Elevated>, name: &str, program: &Path, args: &[std::ffi::OsString], log_path: &Path) -> io::Result<Self> {
+        let id = helper.spawn(program, args, log_path)?;
+        Ok(Self { name: name.into(), child: None, log_path: log_path.to_owned(), elevated: true, helper: Some((helper.clone(), id)) })
     }
 
     /// Like [`spawn`](Self::spawn), but as root through pkexec, which asks for the admin password
     /// (Linux). Elsewhere, and in tests, it runs normally (Windows: the app itself runs elevated).
-    pub fn spawn_elevated<I, S>(name: &'static str, program: &Path, args: I, log_path: &Path) -> io::Result<Self>
+    pub fn spawn_elevated<I, S>(name: &str, program: &Path, args: I, log_path: &Path) -> io::Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -76,7 +86,7 @@ impl Process {
 
     /// Runs `program` inside [`ELEVATED_WRAPPER`], launched by `launcher` (pkexec).
     #[cfg(target_os = "linux")]
-    fn spawn_wrapped<I, S>(name: &'static str, mut launcher: Command, program: &Path, args: I, log_path: &Path) -> io::Result<Self>
+    fn spawn_wrapped<I, S>(name: &str, mut launcher: Command, program: &Path, args: I, log_path: &Path) -> io::Result<Self>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -89,21 +99,38 @@ impl Process {
             .stdin(Stdio::piped())
             .stdout(log.try_clone()?)
             .stderr(log);
-        Ok(Self { name, child: launcher.spawn()?, log_path: log_path.to_owned(), elevated: true })
+        Ok(Self { name: name.into(), child: Some(launcher.spawn()?), log_path: log_path.to_owned(), elevated: true, helper: None })
     }
 
     /// False while an elevated process still waits for the admin password.
     pub fn authorized(&self) -> bool {
+        if let Some((helper, _)) = &self.helper {
+            return helper.authorized();
+        }
         !self.elevated || self.log_contains(AUTHORIZED_MARKER)
     }
 
-    /// `None` while running, the exit status once it has exited.
+    /// `None` while running, the exit status once it has exited (own child processes only).
     pub fn exit_status(&mut self) -> io::Result<Option<ExitStatus>> {
-        self.child.try_wait()
+        self.child.as_mut().map_or(Ok(None), Child::try_wait)
     }
 
     /// Running, or why it stopped (the last log line is usually the actual error).
     pub fn status(&mut self) -> Status {
+        if let Some((helper, id)) = &self.helper {
+            return match helper.status(*id) {
+                MemberStatus::Running => Status::Running,
+                // A root plugin's prompt, also in the proxy modes: not ADMIN_REFUSED, which is about Tunnel mode.
+                MemberStatus::HelperGone { refused: true } => {
+                    Status::Failed(format!("{} needs the admin password: enter it when asked, or turn the plugin off", self.name))
+                }
+                MemberStatus::HelperGone { refused: false } => Status::Failed(format!("{} stopped: the admin helper exited", self.name)),
+                MemberStatus::Exited(code) => Status::Failed(match last_log_line(&self.log_path) {
+                    Some(line) => format!("{} exited: {line}", self.name),
+                    None => format!("{} exited (code {})", self.name, code.map_or("unknown".into(), |c| c.to_string())),
+                }),
+            };
+        }
         match self.exit_status() {
             Ok(None) => Status::Running,
             // pkexec: 126 = the password dialog was dismissed, 127 = not authorized.
@@ -125,7 +152,11 @@ impl Process {
     /// Asks the process to exit (SIGTERM on Unix, so routes get cleaned up),
     /// and kills it if it is still running after a timeout.
     pub fn stop(&mut self) -> io::Result<()> {
-        if self.exit_status()?.is_some() {
+        if let Some((helper, id)) = &self.helper {
+            return helper.stop(*id);
+        }
+        let Some(child) = self.child.as_mut() else { return Ok(()) };
+        if child.try_wait()?.is_some() {
             return Ok(());
         }
 
@@ -138,9 +169,9 @@ impl Process {
 
             // Elevated: closing stdin makes the root wrapper stop the engine. The SIGTERM still
             // reaches pkexec while it waits for the password (it runs as us until then).
-            drop(self.child.stdin.take());
+            drop(child.stdin.take());
             // SAFETY: plain syscall on a pid we own; the child has not been reaped yet.
-            unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+            unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
 
             let timeout = if self.elevated { ELEVATED_STOP_TIMEOUT } else { STOP_TIMEOUT };
             let deadline = Instant::now() + timeout;
@@ -155,8 +186,9 @@ impl Process {
         if self.elevated {
             return Err(io::Error::other(format!("{} (running as admin) didn't stop", self.name)));
         }
-        self.child.kill()?;
-        self.child.wait()?;
+        let Some(child) = self.child.as_mut() else { return Ok(()) };
+        child.kill()?;
+        child.wait()?;
         Ok(())
     }
 }
@@ -248,7 +280,7 @@ mod tests {
         assert_eq!(process.status(), Status::Running);
 
         // Only close the pipe, as a crash would: a root wrapper can't be signalled by us.
-        drop(process.child.stdin.take());
+        drop(process.child.as_mut().unwrap().stdin.take());
         let deadline = Instant::now() + Duration::from_secs(3);
         while process.exit_status().unwrap().is_none() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));

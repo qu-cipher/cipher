@@ -4,9 +4,20 @@ use std::{env, fs, io, path::{Path, PathBuf}};
 /// Per-user app data directory (configs, logs, cache), created on first use.
 /// Linux: ~/.local/share/cipher_client, Windows: %APPDATA%\cipher_client
 pub fn data_dir() -> Result<PathBuf, EngineError> {
+    #[cfg(test)]
+    if let Some(dir) = TEST_DATA_DIR.with(|d| d.borrow().clone()) {
+        fs::create_dir_all(&dir)?;
+        return Ok(dir);
+    }
     let dir = dirs::data_dir().ok_or(EngineError::NoDataDir)?.join("cipher_client");
     fs::create_dir_all(&dir)?;
     Ok(dir)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's own data dir (this thread only), so tests never touch the real one.
+    pub static TEST_DATA_DIR: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Where downloaded engines are installed.

@@ -249,3 +249,23 @@ fn imported_links_pass_sing_box_check() {
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn plugin_schemes_become_plugin_configs() {
+    use crate::import::ImportError;
+    use crate::profile::Profile;
+    let _lock = crate::plugin::tests::SCHEMES_LOCK.lock().unwrap();
+    assert!(matches!(parse_link("zzproto://abc#Home"), Err(ImportError::UnsupportedScheme(_))));
+    let mut manifest = crate::plugin::tests::engine();
+    manifest.id = "zz".into();
+    manifest.schemes = vec!["zzproto".into()];
+    let record = crate::plugin::InstallRecord { source: String::new(), sha256: String::new(), official: false, root_allowed: true, development: false };
+    crate::plugin::register_schemes(&[crate::plugin::Installed { manifest, record, binary: Default::default() }]);
+
+    let Profile::Plugin { name, plugin, link, .. } = parse_link("ZZproto://abc@x:1?y=2#My%20Server").unwrap() else { panic!() };
+    assert_eq!((name.as_str(), plugin.as_str()), ("My Server", "zz"));
+    assert_eq!(link.as_deref(), Some("ZZproto://abc@x:1?y=2#My%20Server"));
+    let Profile::Plugin { name, .. } = parse_link("zzproto://abc").unwrap() else { panic!() };
+    assert_eq!(name, "zz config");
+    crate::plugin::register_schemes(&[]);
+}

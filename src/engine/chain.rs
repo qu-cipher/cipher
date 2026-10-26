@@ -6,7 +6,7 @@
 //! happens before a TUN exists. Its later connections are routed direct by process name,
 //! or the TUN would send them back into it.
 
-use crate::engine::{process::Process, singbox::SingBoxEngine, Engine, EngineError, Status};
+use crate::engine::{process::Process, singbox::SingBoxEngine, Assist, Engine, EngineError, Status};
 use crate::engine::singbox::config::{
     outbound::{Outbound, socks::SocksOutbound},
     shared::Network,
@@ -27,11 +27,14 @@ pub struct Chain {
     process_name: String,
     /// The sing-box side to start: a SOCKS profile pointing at the upstream, and the settings.
     pending: Option<(Profile, Settings)>,
+    /// From a transport plugin under the upstream, or the upstream's own admin helper.
+    assist: Assist,
     singbox: Option<SingBoxEngine>,
 }
 
 impl Chain {
     /// `network`: what the upstream's SOCKS proxy forwards (`None` = TCP and UDP).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         upstream: Process,
         log_path: PathBuf,
@@ -40,6 +43,7 @@ impl Chain {
         socks_port: u16,
         network: Option<Network>,
         settings: &Settings,
+        assist: Assist,
     ) -> Self {
         let outbound = Outbound::Socks(SocksOutbound {
             tag: name.into(),
@@ -55,6 +59,7 @@ impl Chain {
             socks_port,
             process_name: binary.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
             pending: Some((Profile::Proxy { name: name.into(), outbound }, settings.clone())),
+            assist,
             singbox: None,
         }
     }
@@ -83,6 +88,7 @@ impl Chain {
         let Some((profile, settings)) = self.pending.take() else { return Ok(()) };
         let mut singbox = SingBoxEngine::default();
         singbox.direct_processes = vec![self.process_name.clone()];
+        singbox.assist(self.assist.clone());
         singbox.start(&profile, &settings)?;
         self.singbox = Some(singbox);
         Ok(())

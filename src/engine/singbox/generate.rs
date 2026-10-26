@@ -61,6 +61,7 @@ pub fn build_config(
         Profile::OpenVpn { .. } => return Err(EngineError::WrongEngine(EngineKind::OpenVpn)),
         Profile::Psiphon { .. } => return Err(EngineError::WrongEngine(EngineKind::Psiphon)),
         Profile::Xray { .. } => return Err(EngineError::WrongEngine(EngineKind::Xray)),
+        Profile::Plugin { .. } => return Err(EngineError::WrongEngine(EngineKind::Plugin)),
     }
 
     outbounds.push(Outbound::Direct(DirectOutbound {

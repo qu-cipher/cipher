@@ -309,4 +309,14 @@ impl XrayOutbound {
     pub fn network(&self) -> Network {
         self.stream.as_ref().and_then(|s| s.network).unwrap_or(Network::Raw)
     }
+
+    pub fn server_mut(&mut self) -> Option<(&mut String, &mut u16)> {
+        match &mut self.protocol {
+            Protocol::Vless(s) => s.vnext.first_mut().map(|v| (&mut v.address, &mut v.port)),
+            Protocol::Vmess(s) => s.vnext.first_mut().map(|v| (&mut v.address, &mut v.port)),
+            Protocol::Trojan(s) => s.servers.first_mut().map(|v| (&mut v.address, &mut v.port)),
+            Protocol::Shadowsocks(s) => s.servers.first_mut().map(|v| (&mut v.address, &mut v.port)),
+            Protocol::Freedom(_) => None,
+        }
+    }
 }

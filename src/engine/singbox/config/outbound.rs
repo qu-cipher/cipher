@@ -12,7 +12,7 @@ use self::{
     selector::SelectorOutbound,
     urltest::UrltestOutbound,
 };
-use super::shared::TlsOutbound;
+use super::shared::{TlsOutbound, TransportOptions};
 use serde::{Serialize, Deserialize};
 
 pub mod direct;
@@ -76,5 +76,44 @@ impl Outbound {
             Outbound::AnyTls(o) => Some(&mut o.tls),
             _ => None,
         }
+    }
+
+    /// Server address and port, for the outbounds that dial one server.
+    pub fn server_mut(&mut self) -> Option<(&mut String, &mut u16)> {
+        match self {
+            Outbound::Socks(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::Http(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::Shadowsocks(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::Vmess(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::Vless(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::Trojan(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::Hysteria2(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::Tuic(o) => Some((&mut o.server, &mut o.server_port)),
+            Outbound::AnyTls(o) => Some((&mut o.server, &mut o.server_port)),
+            _ => None,
+        }
+    }
+
+    /// TLS options of every outbound that has them (TCP and QUIC ones).
+    pub fn tls_mut(&mut self) -> Option<&mut TlsOutbound> {
+        match self {
+            Outbound::Hysteria2(o) => o.tls.as_mut(),
+            Outbound::Tuic(o) => Some(&mut o.tls),
+            other => other.tcp_tls_mut(),
+        }
+    }
+
+    pub fn transport_mut(&mut self) -> Option<&mut TransportOptions> {
+        match self {
+            Outbound::Vmess(o) => o.transport.as_mut(),
+            Outbound::Vless(o) => o.transport.as_mut(),
+            Outbound::Trojan(o) => o.transport.as_mut(),
+            _ => None,
+        }
+    }
+
+    /// Whether it carries traffic over UDP (QUIC-based protocols) rather than TCP.
+    pub fn uses_udp(&self) -> bool {
+        matches!(self, Outbound::Hysteria2(_) | Outbound::Tuic(_))
     }
 }

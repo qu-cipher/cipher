@@ -10,7 +10,7 @@ use crate::engine::xray::{
 };
 use crate::routing::Routing;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 /// A connection the user can pick in the UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,6 +37,16 @@ pub enum Profile {
     },
     /// A config only Xray can run (XHTTP, mKCP, VLESS encryption), with sing-box in front.
     Xray { name: String, outbound: XrayOutbound },
+    /// A config for an engine plugin (its id), with sing-box in front: a link in one of the
+    /// plugin's schemes, and/or the values of its fields.
+    Plugin {
+        name: String,
+        plugin: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        fields: BTreeMap<String, String>,
+    },
 }
 
 /// Where an OpenVPN profile's config lives.
@@ -83,7 +93,8 @@ impl Profile {
             | Profile::WireGuard { name, .. }
             | Profile::OpenVpn { name, .. }
             | Profile::Psiphon { name, .. }
-            | Profile::Xray { name, .. } => name,
+            | Profile::Xray { name, .. }
+            | Profile::Plugin { name, .. } => name,
         }
     }
 
@@ -114,6 +125,7 @@ impl Profile {
                 XrayProtocol::Shadowsocks(_) => "ss",
                 XrayProtocol::Freedom(_) => "direct",
             },
+            Profile::Plugin { .. } => "plugin",
         }
     }
 
@@ -144,6 +156,7 @@ impl Profile {
                 XrayProtocol::Shadowsocks(_) => "Shadowsocks",
                 XrayProtocol::Freedom(_) => "Direct",
             },
+            Profile::Plugin { .. } => "Plugins",
         }
     }
 
@@ -178,6 +191,7 @@ impl Profile {
             Profile::OpenVpn { .. } => EngineKind::OpenVpn,
             Profile::Psiphon { .. } => EngineKind::Psiphon,
             Profile::Xray { .. } => EngineKind::Xray,
+            Profile::Plugin { .. } => EngineKind::Plugin,
         }
     }
 }

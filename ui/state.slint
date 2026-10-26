@@ -45,6 +45,33 @@ export struct RuleData {
     target: string,
 }
 
+export struct PluginData {
+    id: string,
+    name: string,
+    // "Transport" or "Engine"
+    kind: string,
+    version: string,
+    license: string,
+    repository: string,
+    description: string,
+    // needs administrator rights, and whether the user allowed them
+    root: bool,
+    root-allowed: bool,
+    official: bool,
+    development: bool,
+}
+
+// One setting in the plugin fields dialog (types: text, number, bool, select).
+export struct FieldData {
+    key: string,
+    label: string,
+    kind: string,
+    hint: string,
+    required: bool,
+    value: string,
+    options: [string],
+}
+
 export global AppState {
     // ── Connection ──
     in property <ConnectionState> connection: ConnectionState.disconnected;
@@ -93,6 +120,37 @@ export global AppState {
     in property <string> creds-dialog-action: "Save";
     in-out property <string> creds-username;
     in-out property <string> creds-password;
+
+    // ── Plugins ──
+    in property <[PluginData]> plugins;
+    // CIPHER_PLUGIN_DEV=1: local plugin folders without the release checks
+    in property <bool> plugin-dev-mode;
+    // Add-plugin dialog: step 1 the source, step 2 (`plugin-review-ready`) the review.
+    in-out property <bool> plugin-dialog-open;
+    in-out property <string> plugin-dialog-source;
+    in property <bool> plugin-dialog-busy;
+    in property <string> plugin-dialog-error;
+    in property <bool> plugin-review-ready;
+    in property <PluginData> plugin-review;
+    in property <[string]> plugin-review-warnings;
+    in-out property <bool> plugin-review-allow-root;
+    // Allowing administrator rights later, from the plugin list: the plugin's id.
+    in-out property <string> plugin-root-dialog-id;
+    in property <string> plugin-root-dialog-name;
+
+    // Plugin fields dialog: a transport's settings for a config, or a new engine-plugin config.
+    in-out property <bool> fields-dialog-open;
+    in property <string> fields-dialog-title;
+    in property <bool> fields-dialog-needs-name;
+    in-out property <string> fields-dialog-name;
+    in property <[FieldData]> fields-dialog-fields;
+    in property <string> fields-dialog-error;
+
+    // Transport plugin for the selected config: "None" first, then the installed transports.
+    in property <bool> transport-available;
+    in property <[string]> transports: ["None"];
+    in-out property <int> selected-transport;
+    in property <bool> transport-has-fields;
 
     // ── Toast ──
     in property <string> notice;
@@ -184,6 +242,21 @@ export global AppState {
     callback install-xray();
     callback install-psiphon();
     callback open-data-dir();
+
+    // Plugins
+    callback review-plugin(string);
+    callback pick-plugin-file();
+    callback install-plugin();
+    callback remove-plugin(string);
+    callback allow-plugin-root(string);
+    callback revoke-plugin-root(string);
+    callback new-plugin-config(string);
+    // index into `fields-dialog-fields`, new value
+    callback edit-field(int, string);
+    callback save-fields();
+    callback cancel-fields();
+    callback transport-changed();
+    callback edit-transport();
     // opens a link in the default browser
     callback open-url(string);
 }

@@ -1,0 +1,130 @@
+import { Theme } from "../theme.slint";
+import { PluginData } from "../state.slint";
+import { IconButton, PillButton, ProtocolBadge } from "buttons.slint";
+
+// One installed plugin: name, badges, license and repository, and its actions.
+export component PluginItem inherits Rectangle {
+    in property <PluginData> data;
+
+    callback open-repository();
+    callback new-config();
+    callback allow-root();
+    callback revoke-root();
+    callback remove();
+
+    private property <bool> confirm-delete;
+
+    height: 64px;
+    border-radius: 12px;
+    background: Theme.surface;
+    border-width: 1px;
+    border-color: Theme.border;
+
+    HorizontalLayout {
+        padding: 12px;
+        padding-right: 8px;
+        spacing: 8px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 4px;
+
+            HorizontalLayout {
+                spacing: 6px;
+
+                Text {
+                    text: data.name;
+                    font-size: 14px;
+                    font-weight: 600;
+                    overflow: elide;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    ProtocolBadge { protocol: data.kind == "Engine" ? "engine" : "transport"; }
+                }
+
+                if data.official: VerticalLayout {
+                    alignment: center;
+                    ProtocolBadge { protocol: "official"; }
+                }
+
+                if data.development: VerticalLayout {
+                    alignment: center;
+                    ProtocolBadge { protocol: "development"; }
+                }
+
+                if data.root: VerticalLayout {
+                    alignment: center;
+                    ProtocolBadge { protocol: data.root-allowed ? "admin" : "admin: not allowed"; }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+            }
+
+            // Clicking the line opens the repository.
+            Text {
+                text: "v" + data.version + " · " + data.license + " · " + data.repository;
+                font-size: 11px;
+                color: repo-touch.has-hover ? Theme.accent : Theme.text-muted;
+                overflow: elide;
+
+                repo-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.open-repository(); }
+                }
+            }
+        }
+
+        if !root.confirm-delete && data.kind == "Engine": VerticalLayout {
+            alignment: center;
+            PillButton {
+                text: "New config";
+                icon: @image-url("../../assets/icons/MdiPlus.svg");
+                enabled: !data.root || data.root-allowed;
+                clicked => { root.new-config(); }
+            }
+        }
+
+        if !root.confirm-delete && data.root: VerticalLayout {
+            alignment: center;
+            PillButton {
+                text: data.root-allowed ? "Revoke admin" : "Allow admin";
+                clicked => {
+                    if data.root-allowed { root.revoke-root(); } else { root.allow-root(); }
+                }
+            }
+        }
+
+        if !root.confirm-delete: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: @image-url("../../assets/icons/MdiDelete.svg");
+                size: 16px;
+                hover-color: Theme.danger;
+                clicked => { root.confirm-delete = true; }
+            }
+        }
+
+        if root.confirm-delete: VerticalLayout {
+            alignment: center;
+            PillButton {
+                text: "Remove";
+                danger: true;
+                clicked => {
+                    root.confirm-delete = false;
+                    root.remove();
+                }
+            }
+        }
+
+        if root.confirm-delete: VerticalLayout {
+            alignment: center;
+            PillButton {
+                text: "Keep";
+                clicked => { root.confirm-delete = false; }
+            }
+        }
+    }
+}

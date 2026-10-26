@@ -2,7 +2,7 @@
 //! (a server entry from `psiphond generate`) or private network (a client config) and serves a
 //! local SOCKS proxy, with sing-box in front (see `engine::chain`).
 
-use crate::engine::{chain::{self, Chain}, paths, process::Process, Engine, EngineError, Status};
+use crate::engine::{chain::{self, Chain}, paths, process::Process, Assist, Engine, EngineError, Status};
 use crate::engine::singbox::config::shared::Network;
 use crate::profile::{Profile, PsiphonSource, Settings};
 use serde_json::{Map, Value};
@@ -65,6 +65,7 @@ fn last_error(log: &str) -> Option<String> {
 #[derive(Default)]
 pub struct PsiphonEngine {
     chain: Option<Chain>,
+    assist: Assist,
 }
 
 impl Engine for PsiphonEngine {
@@ -93,7 +94,7 @@ impl Engine for PsiphonEngine {
             &log_path,
         )?;
         // Psiphon's SOCKS proxy only forwards TCP: UDP fails fast instead of timing out.
-        self.chain = Some(Chain::new(process, log_path, &binary, name, socks_port, Some(Network::Tcp), settings));
+        self.chain = Some(Chain::new(process, log_path, &binary, name, socks_port, Some(Network::Tcp), settings, self.assist.clone()));
         Ok(())
     }
 
@@ -115,6 +116,10 @@ impl Engine for PsiphonEngine {
 
     fn authorized(&mut self) -> bool {
         self.chain.as_mut().is_some_and(Chain::authorized)
+    }
+
+    fn assist(&mut self, assist: Assist) {
+        self.assist = assist;
     }
 }
 
