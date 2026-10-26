@@ -97,13 +97,19 @@ export component SettingsPanel inherits ScrollView {
                 }
             }
 
+            // Core plugins (from the Plugins tab), next to the built-in engines.
+            for engine in AppState.core-plugins: Row {
+                label: engine.name;
+                hint: engine.status;
+            }
+
             Row {
                 label: "Core";
-                hint: "Runs VLESS, VMess, Trojan and Shadowsocks configs. XHTTP, mKCP and VLESS encryption always use Xray.";
+                hint: "Runs VLESS, VMess, Trojan and Shadowsocks configs. XHTTP, mKCP and VLESS encryption always use Xray, unless a core plugin can run them.";
                 VerticalLayout {
                     alignment: center;
                     ComboBox {
-                        width: 110px;
+                        width: 150px;
                         model: AppState.cores;
                         current-index <=> AppState.core;
                         selected => { AppState.settings-changed(); }

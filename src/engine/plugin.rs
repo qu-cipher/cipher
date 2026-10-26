@@ -1,6 +1,7 @@
 //! Running plugins (see `crate::plugin`):
 //! - [`PluginEngine`] runs an engine plugin's config: the plugin serves SOCKS on a free loopback
-//!   port, and sing-box starts in front of it once it's ready (`engine::chain`).
+//!   port, and sing-box starts in front of it once it's ready (`engine::chain`). Core plugins run
+//!   the user's ordinary configs the same way, getting the config's outbound as `{outbound}`.
 //! - [`Transported`] runs any proxy config through a transport plugin: the plugin starts first, and
 //!   the config's engine then dials `127.0.0.1:<plugin port>` instead of the server.
 //!
@@ -15,8 +16,9 @@ use crate::engine::{
     Assist, Engine, EngineError, Status,
 };
 use crate::engine::singbox::config::shared::{Network as SingBoxNetwork, TransportOptions};
-use crate::engine::xray::config::{Network as XrayNetwork, Security};
-use crate::plugin::{self, Installed, Kind, Network, Ready, TransportUse, Values};
+use crate::engine::singbox::generate::{self, PROXY_TAG};
+use crate::engine::xray::{self, Core, config::{Network as XrayNetwork, Security}, convert};
+use crate::plugin::{self, CoreFormat, Installed, Kind, Network, Ready, TransportUse, Values};
 use crate::profile::{Profile, Settings};
 use std::{
     collections::BTreeMap,
@@ -101,6 +103,10 @@ fn launch(plugin: &Installed, fields: &BTreeMap<String, String>, port: u16, extr
         let text = plugin::render(template, &values).map_err(plugin_error)?;
         paths::write_private(&path, &text)?;
     }
+    for (name, template) in &manifest.files {
+        let text = plugin::render(template, &values).map_err(plugin_error)?;
+        paths::write_private(&work.join(name), &text)?;
+    }
     let args = manifest
         .args
         .iter()
@@ -120,7 +126,59 @@ fn launch(plugin: &Installed, fields: &BTreeMap<String, String>, port: u16, extr
 
 // ───────────────────────────── Engine plugins ─────────────────────────────
 
-/// Runs a `Profile::Plugin` config: the plugin, then sing-box in front of its SOCKS port.
+/// Whether a config runs on a core plugin: always for a protocol only a plugin knows, and with
+/// Settings → Core set to a plugin, every config its format can carry.
+pub fn runs_on_core(profile: &Profile, settings: &Settings) -> bool {
+    let Core::Plugin(id) = &settings.core else { return matches!(profile, Profile::Custom { .. }) };
+    // A missing plugin still "runs" them, so connecting says it's missing.
+    let format = paths::data_dir().ok().and_then(|dir| plugin::load(&dir, id).ok()).and_then(|p| p.manifest.core).map(|c| c.format);
+    match profile {
+        Profile::Custom { .. } => true,
+        Profile::Proxy { outbound, .. } => match format {
+            Some(CoreFormat::Xray) => convert::from_singbox(outbound).is_some(),
+            _ => true,
+        },
+        Profile::Xray { .. } => format != Some(CoreFormat::SingBox),
+        _ => false,
+    }
+}
+
+/// The core plugin for a config and the config's outbound in that plugin's format (JSON).
+fn core_outbound(profile: &Profile, settings: &Settings) -> Result<(Installed, String), EngineError> {
+    let id = match (profile, &settings.core) {
+        (Profile::Custom { .. }, _) => {
+            let kind = profile.custom_type();
+            let owner = plugin::installed(&paths::data_dir()?)
+                .into_iter()
+                .find(|p| p.manifest.core.as_ref().is_some_and(|c| c.protocols.iter().any(|t| t == kind)));
+            owner.map(|p| p.manifest.id).ok_or_else(|| plugin_error(format!("`{kind}` configs need a core plugin that runs them: add one in Plugins")))?
+        }
+        (_, Core::Plugin(id)) => id.clone(),
+        _ => return Err(EngineError::WrongEngine(profile.engine_kind())),
+    };
+    let plugin = load(&id, Kind::Engine)?;
+    let name = &plugin.manifest.name;
+    let Some(core) = &plugin.manifest.core else { return Err(plugin_error(format!("{name} isn't a core plugin"))) };
+    let json = |value: Result<serde_json::Value, serde_json::Error>| value.map_err(|e| plugin_error(e.to_string()));
+    let outbound = match (core.format, profile) {
+        (_, Profile::Custom { outbound, .. }) => {
+            let mut outbound = outbound.clone();
+            outbound["tag"] = PROXY_TAG.into();
+            outbound
+        }
+        (CoreFormat::SingBox, Profile::Proxy { outbound, .. }) => json(serde_json::to_value(generate::proxy_outbound(outbound, settings)))?,
+        (CoreFormat::Xray, Profile::Proxy { outbound, .. }) => {
+            let outbound = convert::from_singbox(outbound).ok_or_else(|| plugin_error(format!("{name} can't run this config")))?;
+            json(serde_json::to_value(xray::proxy_outbound(&outbound, settings)))?
+        }
+        (CoreFormat::Xray, Profile::Xray { outbound, .. }) => json(serde_json::to_value(xray::proxy_outbound(outbound, settings)))?,
+        _ => return Err(plugin_error(format!("{name} can't run this config"))),
+    };
+    Ok((plugin, outbound.to_string()))
+}
+
+/// Runs a `Profile::Plugin` config, or any config on a core plugin: the plugin, then sing-box in
+/// front of its SOCKS port.
 #[derive(Default)]
 pub struct PluginEngine {
     chain: Option<Chain>,
@@ -131,16 +189,22 @@ pub struct PluginEngine {
 
 impl Engine for PluginEngine {
     fn start(&mut self, profile: &Profile, settings: &Settings) -> Result<(), EngineError> {
-        let Profile::Plugin { name, plugin: id, link, fields } = profile else {
-            return Err(EngineError::WrongEngine(profile.engine_kind()));
-        };
         if self.status() == Status::Running {
             return Err(EngineError::AlreadyRunning);
         }
-        let plugin = load(id, Kind::Engine)?;
+        let (plugin, fields, extra) = match profile {
+            Profile::Plugin { plugin: id, link, fields, .. } => {
+                let link = Values::from([("link".into(), link.clone().unwrap_or_default())]);
+                (load(id, Kind::Engine)?, fields.clone(), link)
+            }
+            _ => {
+                let (plugin, outbound) = core_outbound(profile, settings)?;
+                (plugin, BTreeMap::new(), Values::from([("outbound".into(), outbound)]))
+            }
+        };
+        let name = profile.name();
         let port = chain::free_port()?;
-        let extra = Values::from([("link".into(), link.clone().unwrap_or_default())]);
-        let launched = launch(&plugin, fields, port, extra)?;
+        let launched = launch(&plugin, &fields, port, extra)?;
 
         let network = match plugin.manifest.network {
             Network::Tcp => Some(SingBoxNetwork::Tcp),
@@ -356,6 +420,64 @@ mod tests {
         assert!(rewrite(&wireguard, 1).is_err());
     }
 
+    /// Which configs a core plugin runs, and the outbound it gets in each format.
+    #[test]
+    fn core_plugins_get_the_configs_outbound() {
+        use crate::plugin::{InstallRecord, MANIFEST_FILE, Manifest, binary_name, plugins_dir};
+        let data = std::env::temp_dir().join(format!("cipher_core_plugin_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&data);
+        paths::TEST_DATA_DIR.with(|d| *d.borrow_mut() = Some(data.clone()));
+        let install = |manifest: &Manifest| {
+            let dir = plugins_dir(&data).join(&manifest.id);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(binary_name(manifest)), "").unwrap();
+            fs::write(dir.join(MANIFEST_FILE), serde_json::to_string(manifest).unwrap()).unwrap();
+            let record = InstallRecord { source: "test".into(), sha256: String::new(), official: false, root_allowed: false, development: false };
+            plugin::save_record(&data, &manifest.id, &record).unwrap();
+        };
+        let fork = crate::plugin::tests::core();
+        let mut xray_fork = fork.clone();
+        xray_fork.id = "xray-fork".into();
+        xray_fork.core = Some(plugin::CoreSpec { format: CoreFormat::Xray, protocols: Vec::new() });
+        install(&fork);
+        install(&xray_fork);
+
+        let vless = parse_link("vless://bf000d23-0752-40b4-affe-68f7707a9661@a.example.com:443?security=tls&type=ws&path=%2Fws#V").unwrap();
+        let hysteria = parse_link("hy2://pw@h.example.com:443#H").unwrap();
+        let xhttp = parse_link("vless://bf000d23-0752-40b4-affe-68f7707a9661@x.example.com:443?type=xhttp&security=tls&path=%2Fx#X").unwrap();
+        let custom = Profile::Custom { name: "N".into(), outbound: serde_json::json!({ "type": "fakeproto", "tag": "t", "server": "f.example.com" }) };
+
+        // Built-in cores: only plugin-only protocols go to a plugin.
+        let builtin = Settings::default();
+        assert!(!runs_on_core(&vless, &builtin) && runs_on_core(&custom, &builtin));
+        let (plugin, outbound) = core_outbound(&custom, &builtin).unwrap();
+        assert_eq!(plugin.manifest.id, "fork");
+        let outbound: Value = serde_json::from_str(&outbound).unwrap();
+        assert_eq!((outbound["type"].as_str(), outbound["tag"].as_str()), (Some("fakeproto"), Some("proxy")));
+
+        // A sing-box fork as the core: sing-box outbounds (with TLS fragmenting when on); not Xray-only configs.
+        let settings = Settings { core: Core::Plugin("fork".into()), tls_fragment: true, ..Default::default() };
+        assert!(runs_on_core(&vless, &settings) && runs_on_core(&hysteria, &settings) && !runs_on_core(&xhttp, &settings));
+        let outbound: Value = serde_json::from_str(&core_outbound(&vless, &settings).unwrap().1).unwrap();
+        assert_eq!((outbound["type"].as_str(), outbound["tag"].as_str()), (Some("vless"), Some("proxy")));
+        assert_eq!(outbound["tls"]["fragment"], true);
+
+        // An Xray fork: what Xray can run, as Xray outbounds; Hysteria2 stays on sing-box.
+        let settings = Settings { core: Core::Plugin("xray-fork".into()), ..Default::default() };
+        let xhttp = crate::engine::xray::effective(&xhttp, &settings).into_owned();
+        assert!(runs_on_core(&vless, &settings) && runs_on_core(&xhttp, &settings) && !runs_on_core(&hysteria, &settings));
+        let outbound: Value = serde_json::from_str(&core_outbound(&xhttp, &settings).unwrap().1).unwrap();
+        assert_eq!((outbound["protocol"].as_str(), outbound["tag"].as_str()), (Some("vless"), Some("proxy")));
+        assert_eq!(crate::engine::kind_for(&hysteria, &settings), crate::engine::EngineKind::SingBox);
+
+        // A removed core plugin says so when connecting.
+        let settings = Settings { core: Core::Plugin("gone".into()), ..Default::default() };
+        assert!(runs_on_core(&vless, &settings));
+        assert!(core_outbound(&vless, &settings).unwrap_err().to_string().contains("isn't installed"));
+        assert_eq!(serde_json::to_value(&settings.core).unwrap(), serde_json::json!({ "plugin": "gone" }));
+        fs::remove_dir_all(&data).unwrap();
+    }
+
     /// End to end, on localhost only: sing-box plays the plugins and the "server".
     #[cfg(unix)]
     mod e2e {
@@ -469,12 +591,18 @@ mod tests {
         }
 
         /// An engine plugin serving SOCKS: app proxy → sing-box → plugin → the local web server.
+        /// Its config comes from `files` rather than `config_template`.
         #[test]
         #[ignore = "needs sing-box"]
         fn engine_plugin_end_to_end() {
             let data = test_data_dir("engine");
             let template = r#"{"log":{"level":"error"},"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":{listen_port}}],"outbounds":[{"type":"direct"}]}"#;
-            install_fake(&data, manifest("fake-engine", "engine", template, false), false);
+            let mut engine_manifest = manifest("fake-engine", "engine", template, false);
+            engine_manifest.config_template = None;
+            engine_manifest.files = BTreeMap::from([("engine.json".into(), template.into())]);
+            engine_manifest.args = vec!["run".into(), "-c".into(), "{data_dir}/engine.json".into()];
+            engine_manifest.validate().unwrap();
+            install_fake(&data, engine_manifest, false);
             let web = http_server();
             let settings = proxy_settings();
 
@@ -483,6 +611,76 @@ mod tests {
             run(&mut engine, &profile, &settings);
             assert!(get_through_proxy(settings.proxy_port, web).ends_with("hello"));
             engine.stop().unwrap();
+            fs::remove_dir_all(&data).unwrap();
+        }
+
+        /// The official MasterDnsVPN manifest with the real client (`MASTERDNSVPN_BINARY`): it loads
+        /// the rendered config and resolver list, and stops on SIGTERM. Its resolvers are on
+        /// 127.0.0.1, so nothing leaves the machine and no tunnel comes up.
+        #[test]
+        #[ignore = "needs MASTERDNSVPN_BINARY"]
+        fn masterdnsvpn_accepts_its_config() {
+            let binary = PathBuf::from(std::env::var("MASTERDNSVPN_BINARY").expect("set MASTERDNSVPN_BINARY"));
+            let data = test_data_dir("masterdnsvpn");
+            let manifest = Manifest::parse(crate::plugin::official_text("masterdnsvpn").unwrap()).unwrap();
+            let dir = plugins_dir(&data).join(&manifest.id);
+            fs::create_dir_all(&dir).unwrap();
+            std::os::unix::fs::symlink(&binary, dir.join(binary_name(&manifest))).unwrap();
+            fs::write(dir.join(MANIFEST_FILE), serde_json::to_string(&manifest).unwrap()).unwrap();
+            let record = InstallRecord { source: "test".into(), sha256: String::new(), official: true, root_allowed: false, development: false };
+            plugin::save_record(&data, &manifest.id, &record).unwrap();
+
+            let plugin = load("masterdnsvpn", Kind::Engine).unwrap();
+            let fields = BTreeMap::from([
+                ("domains".to_owned(), "v.example.com, w.example.com".to_owned()),
+                ("encryption".to_owned(), "5".to_owned()),
+                ("key".to_owned(), "a \"quoted\" key".to_owned()),
+                ("resolvers".to_owned(), "127.0.0.1:5399\n127.0.0.2\n".to_owned()),
+            ]);
+            let launched = launch(&plugin, &fields, chain::free_port().unwrap(), Values::new()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let log = loop {
+                let log = fs::read_to_string(&launched.log_path).unwrap_or_default();
+                if log.contains("Testing MTU sizes") {
+                    break log;
+                }
+                assert!(Instant::now() < deadline, "MasterDnsVPN didn't start:\n{log}");
+                thread::sleep(Duration::from_millis(100));
+            };
+            assert!(log.contains("Configured Domains: 2"), "{log}");
+            assert!(log.contains("Loaded Resolvers: 2 endpoints"), "{log}");
+            assert!(log.contains("Encryption: 5"), "{log}");
+            assert!(!launched.is_ready(), "no tunnel, so no SOCKS port");
+            drop(launched);
+            fs::remove_dir_all(&data).unwrap();
+        }
+
+        /// A core plugin (sing-box as a "fork") running an ordinary SOCKS config chosen with
+        /// Settings → Core: app proxy → sing-box → fork → fake server → the local web server.
+        #[test]
+        #[ignore = "needs sing-box"]
+        fn core_plugin_end_to_end() {
+            let data = test_data_dir("core");
+            let template = r#"{"log":{"level":"error"},"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":{listen_port}}],"outbounds":[{outbound},{"type":"direct","tag":"direct"}]}"#;
+            let mut fork = manifest("fork", "engine", template, false);
+            fork.core = Some(plugin::CoreSpec { format: CoreFormat::SingBox, protocols: Vec::new() });
+            fork.validate().unwrap();
+            install_fake(&data, fork, false);
+            let (mut server, server_port) = fake_server(&data.join("server"));
+            let web = http_server();
+
+            let profile = Profile::Proxy {
+                name: "Server".into(),
+                outbound: Outbound::Socks(SocksOutbound { server: "127.0.0.1".into(), server_port, ..Default::default() }),
+            };
+            let settings = Settings { core: Core::Plugin("fork".into()), ..proxy_settings() };
+            let kind = crate::engine::kind_for(&profile, &settings);
+            assert_eq!(kind, crate::engine::EngineKind::Plugin);
+            let mut engine = crate::engine::engine_for(kind);
+            run(engine.as_mut(), &profile, &settings);
+            assert!(get_through_proxy(settings.proxy_port, web).ends_with("hello"));
+            engine.stop().unwrap();
+            let _ = server.kill();
             fs::remove_dir_all(&data).unwrap();
         }
 

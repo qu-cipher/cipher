@@ -1,5 +1,6 @@
 //! Subscriptions that serve a whole sing-box config: its proxy outbounds and WireGuard
 //! endpoints become profiles. Our own TUN/DNS/route settings replace everything else.
+//! Outbounds in a protocol an installed core plugin declares are kept as is (`Profile::Custom`).
 
 use crate::engine::singbox::config::{endpoint::Endpoint, outbound::Outbound};
 use crate::import::subscription::Subscription;
@@ -53,6 +54,12 @@ fn to_profile(mut value: Value) -> Result<Profile, String> {
         return Ok(Profile::WireGuard { name: fallback_name(name, "WireGuard"), endpoint });
     }
 
+    // A protocol only an installed core plugin knows: kept as is, for that plugin.
+    let kind = value.get("type").and_then(Value::as_str).unwrap_or_default();
+    if crate::plugin::protocol_owner(kind).is_some() {
+        return Ok(Profile::Custom { name: fallback_name(name, kind), outbound: value });
+    }
+
     let outbound: Outbound = serde_json::from_value(value).map_err(|e| unsupported(&e.to_string()))?;
     Ok(Profile::Proxy { name: fallback_name(name, "Server"), outbound })
 }
@@ -84,6 +91,31 @@ mod tests {
         assert_eq!(names, ["proxy", "vmess-ws", "trojan-grpc", "ss"]);
         assert_eq!(protocols, ["vless", "vmess", "trojan", "ss"]);
         assert!(subscription.skipped.is_empty());
+    }
+
+    /// Outbounds in a protocol an installed core plugin declares are kept as is; without the
+    /// plugin they're skipped as unsupported.
+    #[test]
+    fn keeps_core_plugin_protocols() {
+        use crate::plugin::{InstallRecord, Installed, tests::{SCHEMES_LOCK, core}};
+        let _lock = SCHEMES_LOCK.lock().unwrap();
+        let json = r#"{"outbounds":[{"type":"fakeproto","tag":"New","server":"f.example.com","server_port":8443,"secret":"x"}]}"#;
+        assert!(parse_singbox_json(json).unwrap().profiles.is_empty());
+
+        let record = InstallRecord { source: String::new(), sha256: String::new(), official: false, root_allowed: false, development: false };
+        crate::plugin::register_schemes(&[Installed { manifest: core(), record, binary: Default::default() }]);
+        let subscription = parse_singbox_json(json).unwrap();
+        crate::plugin::register_schemes(&[]);
+
+        let [profile] = subscription.profiles.as_slice() else { panic!("{:?}", subscription.skipped) };
+        assert!(matches!(profile, Profile::Custom { .. }));
+        assert_eq!((profile.name(), profile.protocol(), profile.group()), ("New", "fakeproto", "fakeproto"));
+        assert_eq!(profile.tcp_endpoint(), Some(("f.example.com".into(), 8443)));
+        assert_eq!(profile.engine_kind(), crate::engine::EngineKind::Plugin);
+        // Stored and loaded unchanged, unknown fields included.
+        let saved = serde_json::to_string(profile).unwrap();
+        let Profile::Custom { outbound, .. } = serde_json::from_str::<Profile>(&saved).unwrap() else { panic!() };
+        assert_eq!(outbound["secret"], "x");
     }
 
     #[test]

@@ -103,6 +103,14 @@ impl EngineKind {
     }
 }
 
+/// The engine for a config with these settings: its own, or a core plugin (see `plugin::runs_on_core`).
+pub fn kind_for(profile: &Profile, settings: &Settings) -> EngineKind {
+    match plugin::runs_on_core(profile, settings) {
+        true => EngineKind::Plugin,
+        false => profile.engine_kind(),
+    }
+}
+
 pub fn engine_for(kind: EngineKind) -> Box<dyn Engine + Send> {
     match kind {
         EngineKind::SingBox => Box::new(singbox::SingBoxEngine::default()),

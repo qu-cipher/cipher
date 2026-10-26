@@ -214,15 +214,36 @@ pub fn hide_console(command: &mut Command) {
 /// `Status::Failed` reason when the admin password dialog was dismissed or refused.
 pub const ADMIN_REFUSED: &str = "Tunnel mode needs the admin password";
 
-/// Last non-empty line of a log, without ANSI colors and sing-box's `LEVEL[0000]` prefix.
+/// Last meaningful line of a log, without ANSI colors, sing-box's `LEVEL[0000]` prefix, or Go's
+/// `2026/10/26 17:17:22 [tag] [LEVEL]` prefix. "Press Enter to exit" prompts are skipped.
 fn last_log_line(path: &Path) -> Option<String> {
     let log = fs::read_to_string(path).ok()?;
-    let line = strip_ansi(log.lines().rev().find(|l| !l.trim().is_empty())?);
+    let line = log
+        .lines()
+        .rev()
+        .map(strip_ansi)
+        .find(|l| !l.trim().is_empty() && !l.trim_start().to_ascii_lowercase().starts_with("press enter"))?;
     let line = match line.split_once("] ") {
         Some((prefix, rest)) if prefix.contains('[') && !prefix.contains(' ') => rest,
-        _ => &line,
+        _ => strip_go_log_prefix(&line),
     };
     Some(line.trim().to_owned())
+}
+
+/// `2026/10/26 17:17:22 [Name] [ERROR] message` → `message`.
+fn strip_go_log_prefix(line: &str) -> &str {
+    let is_stamp = |s: &str, sep: u8| s.len() >= 8 && s.bytes().all(|b| b.is_ascii_digit() || b == sep || b == b'.');
+    let mut parts = line.splitn(3, ' ');
+    let (Some(date), Some(time), Some(mut rest)) = (parts.next(), parts.next(), parts.next()) else { return line };
+    if !is_stamp(date, b'/') || !is_stamp(time, b':') {
+        return line;
+    }
+    while let Some(tagged) = rest.strip_prefix('[')
+        && let Some((_, after)) = tagged.split_once("] ")
+    {
+        rest = after;
+    }
+    rest
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -255,6 +276,12 @@ mod tests {
 
         fs::write(&path, "Options error: plain openvpn line\n").unwrap();
         assert_eq!(last_log_line(&path).unwrap(), "Options error: plain openvpn line");
+
+        // MasterDnsVPN: a Go log line, and a startup error followed by a prompt.
+        fs::write(&path, "2026/10/26 17:17:22 [MasterDnsVPN Client] [ERROR] MTU tests failed: no valid connections\n").unwrap();
+        assert_eq!(last_log_line(&path).unwrap(), "MTU tests failed: no valid connections");
+        fs::write(&path, "Client startup failed: ENCRYPTION_KEY is required\nPress Enter to exit...").unwrap();
+        assert_eq!(last_log_line(&path).unwrap(), "Client startup failed: ENCRYPTION_KEY is required");
         fs::remove_file(&path).unwrap();
     }
 

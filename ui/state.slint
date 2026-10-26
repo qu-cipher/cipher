@@ -59,9 +59,19 @@ export struct PluginData {
     root-allowed: bool,
     official: bool,
     development: bool,
+    // an official plugin that isn't installed yet (only "Add")
+    available: bool,
+    // installed official plugin with a newer built-in version
+    update: bool,
 }
 
-// One setting in the plugin fields dialog (types: text, number, bool, select).
+// A core plugin in Settings → Engines.
+export struct EngineData {
+    name: string,
+    status: string,
+}
+
+// One setting in the plugin fields dialog (types: text, number, bool, select, lines).
 export struct FieldData {
     key: string,
     label: string,
@@ -151,6 +161,8 @@ export global AppState {
     in property <[string]> transports: ["None"];
     in-out property <int> selected-transport;
     in property <bool> transport-has-fields;
+    // The selected config is an engine plugin's, made from its settings (they can be edited).
+    in property <bool> plugin-config-editable;
 
     // ── Toast ──
     in property <string> notice;
@@ -200,7 +212,10 @@ export global AppState {
     // downloading Xray
     in property <bool> xray-busy;
     // Engine for VLESS/VMess/Trojan/Shadowsocks configs both can run; same order as `CORES` in Rust.
-    out property <[string]> cores: ["sing-box", "Xray"];
+    // Settings → Core: sing-box, Xray, then core plugins
+    in property <[string]> cores: ["sing-box", "Xray"];
+    // Installed core plugins, listed with the engines
+    in property <[EngineData]> core-plugins;
     in-out property <int> core;
     in property <string> psiphon-status;
     in property <bool> psiphon-installed;
@@ -245,6 +260,8 @@ export global AppState {
 
     // Plugins
     callback review-plugin(string);
+    // "Add" / "Update" on an official plugin: its id
+    callback add-official-plugin(string);
     callback pick-plugin-file();
     callback install-plugin();
     callback remove-plugin(string);
@@ -257,6 +274,7 @@ export global AppState {
     callback cancel-fields();
     callback transport-changed();
     callback edit-transport();
+    callback edit-plugin-config();
     // opens a link in the default browser
     callback open-url(string);
 }

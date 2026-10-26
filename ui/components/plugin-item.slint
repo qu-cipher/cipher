@@ -2,11 +2,13 @@ import { Theme } from "../theme.slint";
 import { PluginData } from "../state.slint";
 import { IconButton, PillButton, ProtocolBadge } from "buttons.slint";
 
-// One installed plugin: name, badges, license and repository, and its actions.
+// One plugin: name, badges, license and repository, and its actions. An official plugin that
+// isn't installed yet (`available`) only offers "Add".
 export component PluginItem inherits Rectangle {
     in property <PluginData> data;
 
     callback open-repository();
+    callback add();
     callback new-config();
     callback allow-root();
     callback revoke-root();
@@ -42,7 +44,7 @@ export component PluginItem inherits Rectangle {
 
                 VerticalLayout {
                     alignment: center;
-                    ProtocolBadge { protocol: data.kind == "Engine" ? "engine" : "transport"; }
+                    ProtocolBadge { protocol: data.kind == "Engine" ? "engine" : data.kind == "Core" ? "core" : "transport"; }
                 }
 
                 if data.official: VerticalLayout {
@@ -77,7 +79,26 @@ export component PluginItem inherits Rectangle {
             }
         }
 
-        if !root.confirm-delete && data.kind == "Engine": VerticalLayout {
+        if data.available: VerticalLayout {
+            alignment: center;
+            PillButton {
+                text: "Add";
+                icon: @image-url("../../assets/icons/MdiPlus.svg");
+                primary: true;
+                clicked => { root.add(); }
+            }
+        }
+
+        if data.update && !root.confirm-delete: VerticalLayout {
+            alignment: center;
+            PillButton {
+                text: "Update";
+                primary: true;
+                clicked => { root.add(); }
+            }
+        }
+
+        if !data.available && !root.confirm-delete && data.kind == "Engine": VerticalLayout {
             alignment: center;
             PillButton {
                 text: "New config";
@@ -87,7 +108,7 @@ export component PluginItem inherits Rectangle {
             }
         }
 
-        if !root.confirm-delete && data.root: VerticalLayout {
+        if !data.available && !root.confirm-delete && data.root: VerticalLayout {
             alignment: center;
             PillButton {
                 text: data.root-allowed ? "Revoke admin" : "Allow admin";
@@ -97,7 +118,7 @@ export component PluginItem inherits Rectangle {
             }
         }
 
-        if !root.confirm-delete: VerticalLayout {
+        if !data.available && !root.confirm-delete: VerticalLayout {
             alignment: center;
             IconButton {
                 icon: @image-url("../../assets/icons/MdiDelete.svg");

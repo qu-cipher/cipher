@@ -94,23 +94,26 @@ just the repository URL):
 | `args` | no | Command-line arguments, with placeholders. No shell is involved, so no quoting is needed. |
 | `config_template` | no | Text Cipher writes to a file before starting you; its path is `{config_file}`. |
 | `config_file_name` | no | File name for `{config_file}` (default `config`). |
+| `files` | no | More files to write before starting you: `{ "file name": "template" }`, with the same placeholders. They go in `{data_dir}`, next to `{config_file}`; refer to one as `{data_dir}/<file name>`. |
 | `ready` | yes | When you're ready: `{ "port": true }` (`{listen_port}` accepts TCP connections) or `{ "log": "some text" }` (your output contains that text). |
 | `network` | yes | `"tcp"`, `"udp"` or `"both"`; see below. |
 | `needs_root` | no | `true` if you need administrator rights; see [Root plugins](#root-plugins). |
 | `schemes` | no | Engines only: link schemes you handle; see [Links](#links-engine-plugins). |
+| `core` | no | Engines only: you run the user's ordinary configs; see [Core plugins](#core-plugins). |
 | `fields` | no | Settings the user fills in per config; see [Fields](#fields). |
 
 Unknown fields are rejected, so typos don't go unnoticed.
 
 ### Placeholders
 
-Used in `args` and `config_template`:
+Used in `args`, `config_template` and `files`:
 
 | Placeholder | Value |
 |---|---|
-| `{listen_port}` | The loopback port you must listen on. **Required** somewhere in `args` or `config_template`. |
+| `{listen_port}` | The loopback port you must listen on. **Required** somewhere in `args`, `config_template` or `files`. |
 | `{server}`, `{server_port}` | Transports only: the server the user's config pointed at, before Cipher redirected it to you. |
 | `{link}` | Engines only: the whole link the config was imported from (empty for configs made from fields). |
+| `{outbound}` | Core plugins only: the selected config's outbound as JSON, in your `core.format`. |
 | `{field.<key>}` | The value of one of your fields. |
 | `{data_dir}` | A folder only your plugin uses (it persists between runs). |
 | `{config_file}` | The path of the rendered `config_template` (only when you have one). |
@@ -136,7 +139,7 @@ config for your engine. Each field:
 |---|---|
 | `key` | Lowercase letters, digits and `_`; used as `{field.<key>}`. |
 | `label` | Shown next to the input. |
-| `type` | `text`, `number`, `bool` (values `true`/`false`) or `select`. |
+| `type` | `text`, `number`, `bool` (values `true`/`false`), `select`, or `lines` (a multi-line box for lists, inserted with its line breaks). |
 | `options` | `select` only: the choices. |
 | `default` | Used when the user leaves it empty. |
 | `required` | The user must fill it in. |
@@ -153,6 +156,36 @@ plugin, named after the `#fragment`, and passes the whole link as `{link}`. Ciph
 Schemes Cipher handles itself (`vless`, `vmess`, `trojan`, `ss`, `hy2`, `tuic`, `anytls`, `wireguard`,
 `ovpn`, `psiphon`, …) can't be claimed.
 
+### Core plugins
+
+An engine with a `core` block runs the user's **ordinary configs** (VLESS, Trojan, Hysteria2, …) instead
+of bringing its own: a fork of sing-box or Xray, or an engine of your own that reads one of their
+outbound formats. Users pick it under *Settings → Core*, next to sing-box and Xray, and it's listed under
+*Settings → Engines*.
+
+```json
+"core": { "format": "sing-box", "protocols": ["shadowquic"] }
+```
+
+| Key | Meaning |
+|---|---|
+| `format` | `"sing-box"` or `"xray"`: the outbound format you read. `{outbound}` is the config's outbound in it, tagged `proxy`, with the user's anti-DPI options applied (TLS fragment for sing-box, `finalmask` for Xray). |
+| `protocols` | `sing-box` format only: outbound types you **add** (names sing-box itself has are refused). Outbounds of these types in sing-box JSON (files, subscriptions, pasted) are kept for you as they are, and **always** run on your plugin, whatever *Core* says. |
+
+Like any engine, you serve SOCKS5 on `127.0.0.1:{listen_port}` and the official sing-box stays in front
+for Tunnel mode, the system proxy and routing. So you only need the outbound side; your template wraps
+`{outbound}` in your own config:
+
+```json
+"config_template": "{ \"inbounds\": [{ \"type\": \"socks\", \"listen\": \"127.0.0.1\", \"listen_port\": {listen_port} }], \"outbounds\": [{outbound}] }"
+```
+
+With *Core* set to your plugin, it gets every config its format can carry: all sing-box proxy configs for
+`sing-box`; for `xray`, what Xray can run (VLESS, VMess, Trojan, Shadowsocks, and the XHTTP/mKCP configs that
+otherwise need Xray). Everything else keeps its built-in engine. Core plugins have no `fields`, `schemes` or
+`{link}`. Resolve server domains yourself (e.g. a DNS section in your template): in Tunnel mode your
+process's traffic goes direct, but the system resolver goes through the tunnel.
+
 ## What your program must do
 
 **Transports:**
@@ -168,7 +201,8 @@ Schemes Cipher handles itself (`vless`, `vmess`, `trojan`, `ss`, `hy2`, `tuic`, 
 - Become ready quickly and say so the way `ready` describes. Cipher waits up to about two minutes
   (this also covers the admin password dialog for root plugins).
 - Write logs to stdout/stderr: they go to `<data>/plugin-<id>.log`, and **your last line is shown to
-  the user if you exit**. Make it a useful error.
+  the user if you exit**. Make it a useful error. (A timestamp like Go's `2026/10/26 17:17:22` and `[tag]`
+  prefixes are removed, and a trailing "Press Enter to exit" prompt is skipped.)
 - Exit cleanly on **SIGTERM** (Linux), restoring anything you changed (routes, firewall rules). Cipher
   waits about 5 seconds (10 for root plugins) before killing you. On Windows you're killed directly.
 - Don't detach or fork into the background: Cipher tracks the process it started.
@@ -257,9 +291,43 @@ jobs:
 
 ## Official plugins
 
-Official plugins are listed inside Cipher itself (their manifest and checksum are pinned in a Cipher
-release), and get an *Official* badge. Any plugin that follows this guide can be installed by URL; the
-badge is the only difference.
+Official plugins are listed inside Cipher itself, ready to add: their manifests are built into each Cipher
+release and published in [`plugins/`](../plugins). They get an *Official* badge, and a newer Cipher release
+can offer an *Update*. Any plugin that follows this guide can be installed by URL; the badge and the
+listing are the only differences.
+
+| Plugin | Kind | What it is |
+|---|---|---|
+| [MasterDnsVPN](../plugins/masterdnsvpn.json) | engine | A DNS tunnel to your own [MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) server: TCP only (its SOCKS proxy relays UDP for DNS alone). A real example of `files` and a `lines` field. |
+
+## Example: a core
+
+A sing-box fork that adds a protocol:
+
+```json
+{
+  "api": 1,
+  "id": "sing-box-plus",
+  "name": "sing-box+",
+  "kind": "engine",
+  "version": "1.14.3-plus.1",
+  "repository": "https://github.com/example/sing-box-plus",
+  "license": "GPL-3.0",
+  "assets": {
+    "linux-x86_64": {
+      "url": "https://github.com/example/sing-box-plus/releases/download/v1.14.3-plus.1/sing-box-plus-linux-amd64.tar.gz",
+      "sha256": "…",
+      "binary": "sing-box-plus/sing-box"
+    }
+  },
+  "core": { "format": "sing-box", "protocols": ["shadowquic"] },
+  "args": ["run", "-c", "{config_file}"],
+  "config_template": "{ \"log\": { \"level\": \"warn\" }, \"dns\": { \"servers\": [{ \"type\": \"udp\", \"tag\": \"local\", \"server\": \"1.1.1.1\" }] }, \"inbounds\": [{ \"type\": \"socks\", \"listen\": \"127.0.0.1\", \"listen_port\": {listen_port} }], \"outbounds\": [{outbound}], \"route\": { \"default_domain_resolver\": \"local\" } }",
+  "config_file_name": "config.json",
+  "ready": { "port": true },
+  "network": "both"
+}
+```
 
 ## Example: an engine
 

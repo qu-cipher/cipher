@@ -35,7 +35,6 @@ const MODES: [ConnectionMode; 3] = [ConnectionMode::Tunnel, ConnectionMode::Syst
 const ROUTE_DEFAULTS: [Target; 2] = [Target::Proxy, Target::Direct];
 const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
 /// Same order as `cores` in the UI.
-const CORES: [xray::Core; 2] = [xray::Core::SingBox, xray::Core::Xray];
 /// Order of the groups in the grouped Configs list (`Profile::group`).
 const GROUP_ORDER: [&str; 16] = [
     "VLESS", "VMess", "Trojan", "Shadowsocks", "Hysteria2", "TUIC", "AnyTLS", "WireGuard", "OpenVPN", "Psiphon",
@@ -882,8 +881,9 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
         ask_credentials(ui, ctx, id, true, "");
         return;
     }
-    // With the Xray core, configs Xray can run go to Xray.
+    // With the Xray core, configs Xray can run go to Xray; with a core plugin, the ones it can run go there.
     let profile = xray::effective(&profile, &settings).into_owned();
+    let kind = engine::kind_for(&profile, &settings);
 
     ctx.cancel.store(false, Ordering::Relaxed);
     ui.global::<AppState>().set_error(SharedString::new());
@@ -897,9 +897,9 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
             let _ = previous.stop();
         }
 
-        let result = start_engine(&profile, transport, &settings, &ctx.cancel);
+        let result = start_engine(kind, &profile, transport, &settings, &ctx.cancel);
         let result = result.map(|engine| *ctx.engine.lock().unwrap() = Some(engine));
-        let proxy_address = match settings.serves_proxy() && profile.engine_kind().runs_singbox() {
+        let proxy_address = match settings.serves_proxy() && kind.runs_singbox() {
             true => format!("{PROXY_LISTEN}:{}", settings.proxy_port),
             false => String::new(),
         };
@@ -928,12 +928,13 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
 
 /// Starts an engine and waits until it is up, has failed, or the user cancelled.
 fn start_engine(
+    kind: engine::EngineKind,
     profile: &Profile,
     transport: Option<TransportUse>,
     settings: &Settings,
     cancel: &AtomicBool,
 ) -> Result<Box<dyn Engine + Send>, String> {
-    let mut engine = engine::engine_for(profile.engine_kind());
+    let mut engine = engine::engine_for(kind);
     if let Some(transport) = transport {
         engine = Box::new(engine::plugin::Transported::new(engine, transport));
     }
@@ -1055,7 +1056,7 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_tls_fragment(settings.tls_fragment);
     state.set_udp_noise(settings.udp_noise);
     state.set_group_configs(settings.group_configs);
-    state.set_core(CORES.iter().position(|c| *c == settings.core).unwrap_or(0) as i32);
+    plugins::refresh_cores(&state, &settings.core);
     state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
     if let Ok(dir) = paths::data_dir() {
         state.set_data_dir(dir.display().to_string().into());
@@ -1084,7 +1085,7 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         tls_fragment: state.get_tls_fragment(),
         udp_noise: state.get_udp_noise(),
         group_configs: state.get_group_configs(),
-        core: CORES.get(state.get_core() as usize).copied().unwrap_or_default(),
+        core: plugins::core_choices(&store.settings.core).into_iter().nth(state.get_core() as usize).map(|(core, _)| core).unwrap_or_default(),
         // Rules and presets are edited through their own callbacks.
         routing: Routing {
             default: ROUTE_DEFAULTS.get(state.get_route_default() as usize).copied().unwrap_or_default(),

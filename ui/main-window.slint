@@ -1,7 +1,7 @@
 import { CheckBox, ComboBox, LineEdit, ScrollView, TextEdit } from "std-widgets.slint";
 import "../assets/Geist.ttf";
 import { Theme } from "theme.slint";
-import { AppState, ConnectionState, ConfigData, FieldData, PluginData, PresetData, RuleData, SubscriptionData } from "state.slint";
+import { AppState, ConnectionState, ConfigData, EngineData, FieldData, PluginData, PresetData, RuleData, SubscriptionData } from "state.slint";
 import { TitleBar } from "./components/title-bar.slint";
 import { PillButton, ProtocolBadge, Toggle } from "./components/buttons.slint";
 import { Sheet } from "./components/sheet.slint";
@@ -9,7 +9,7 @@ import { ConnectPanel } from "./panels/connect-panel.slint";
 import { LibraryPanel } from "./panels/library-panel.slint";
 
 // Rust needs these to talk to the UI.
-export { AppState, ConnectionState, ConfigData, FieldData, PluginData, PresetData, RuleData, SubscriptionData }
+export { AppState, ConnectionState, ConfigData, EngineData, FieldData, PluginData, PresetData, RuleData, SubscriptionData }
 
 export component AppWindow inherits Window {
     title: "Cipher VPN Client";
@@ -325,7 +325,7 @@ export component AppWindow inherits Window {
                 HorizontalLayout {
                     spacing: 6px;
                     alignment: start;
-                    ProtocolBadge { protocol: AppState.plugin-review.kind == "Engine" ? "engine" : "transport"; }
+                    ProtocolBadge { protocol: AppState.plugin-review.kind == "Engine" ? "engine" : AppState.plugin-review.kind == "Core" ? "core" : "transport"; }
                     if AppState.plugin-review.official: ProtocolBadge { protocol: "official"; }
                     if AppState.plugin-review.development: ProtocolBadge { protocol: "development"; }
                     if AppState.plugin-review.root: ProtocolBadge { protocol: "admin"; }
@@ -496,6 +496,14 @@ export component AppWindow inherits Window {
                     if field.kind == "text" || field.kind == "number": LineEdit {
                         text: field.value;
                         input-type: field.kind == "number" ? InputType.decimal : InputType.text;
+                        edited(text) => { AppState.edit-field(i, text); }
+                    }
+
+                    if field.kind == "lines": TextEdit {
+                        height: 96px;
+                        text: field.value;
+                        wrap: no-wrap;
+                        font-size: 12px;
                         edited(text) => { AppState.edit-field(i, text); }
                     }
 

@@ -314,7 +314,10 @@ fn plugin_frames(ui: &AppWindow, ctx: &Ctx, d: &Driver) {
     plugins::refresh_plugins(ui, ctx);
     state.set_current_tab(2);
     d.shot("p01-plugins");
-    assert_eq!(state.get_plugins().row_count(), 2);
+    // The two installed ones, then the official plugins not added yet.
+    let rows: Vec<_> = state.get_plugins().iter().collect();
+    assert_eq!(rows.len(), 2 + crate::plugin::OFFICIAL.len());
+    assert!(rows.iter().any(|p| p.id == "masterdnsvpn" && p.available && p.official));
 
     // The review step of the add dialog, as `review_plugin` fills it in.
     state.set_plugin_review(plugins::plugin_data_for_tests(&engine));
@@ -359,6 +362,66 @@ fn plugin_frames(ui: &AppWindow, ctx: &Ctx, d: &Driver) {
     state.invoke_save_fields();
     assert!(state.get_configs().iter().any(|c| c.name == "Home server"));
     d.shot("p06-engine-config");
+
+    // MasterDnsVPN (official) installed: its form, with the multi-line resolver list.
+    let masterdns = crate::plugin::official().into_iter().find(|m| m.id == "masterdnsvpn").unwrap();
+    let dir = plugins_dir(&data).join(&masterdns.id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(binary_name(&masterdns)), "").unwrap();
+    std::fs::write(dir.join(MANIFEST_FILE), serde_json::to_string(&masterdns).unwrap()).unwrap();
+    let record = InstallRecord { source: "test".into(), sha256: String::new(), official: true, root_allowed: false, development: false };
+    save_record(&data, &masterdns.id, &record).unwrap();
+    plugins::refresh_plugins(ui, ctx);
+    assert!(state.get_plugins().iter().any(|p| p.id == "masterdnsvpn" && !p.available && !p.update));
+    d.shot("p07-official-installed");
+    state.invoke_new_plugin_config("masterdnsvpn".into());
+    let fields = state.get_fields_dialog_fields();
+    let resolvers = fields.iter().position(|f| f.key == "resolvers").unwrap();
+    assert_eq!(fields.row_data(resolvers).unwrap().kind, "lines");
+    state.invoke_edit_field(resolvers as i32, "8.8.8.8\n1.1.1.1:5353\n192.168.1.0/30".into());
+    d.pump(300);
+    d.shot("p08-masterdns-fields");
+    let domains = fields.iter().position(|f| f.key == "domains").unwrap();
+    state.invoke_edit_field(domains as i32, "v.example.com".into());
+    state.set_fields_dialog_name("Home DNS".into());
+    state.invoke_save_fields();
+    assert!(!state.get_fields_dialog_open());
+
+    // The new config is selected; its settings can be edited from the connect panel.
+    assert!(state.get_plugin_config_editable());
+    d.pump(300);
+    d.shot("p09-plugin-config-selected");
+    state.invoke_edit_plugin_config();
+    assert_eq!(state.get_fields_dialog_name(), "Home DNS");
+    let fields = state.get_fields_dialog_fields();
+    assert_eq!(fields.row_data(resolvers).unwrap().value, "8.8.8.8\n1.1.1.1:5353\n192.168.1.0/30");
+    state.invoke_edit_field(resolvers as i32, "9.9.9.9".into());
+    state.invoke_save_fields();
+    let id = state.get_selected_id() as u64;
+    let profile = ctx.store.lock().unwrap().entry(id).unwrap().profile.clone();
+    let Profile::Plugin { name, fields, .. } = profile else { panic!("not a plugin config") };
+    assert_eq!((name.as_str(), fields["resolvers"].as_str()), ("Home DNS", "9.9.9.9"));
+
+    // A core plugin: a "core" badge, a row under Settings → Engines, and a choice under Core.
+    let fork = crate::plugin::tests::core();
+    let dir = plugins_dir(&data).join(&fork.id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(binary_name(&fork)), "").unwrap();
+    std::fs::write(dir.join(MANIFEST_FILE), serde_json::to_string(&fork).unwrap()).unwrap();
+    save_record(&data, &fork.id, &record).unwrap();
+    plugins::refresh_plugins(ui, ctx);
+    state.set_current_tab(2);
+    d.pump(300);
+    d.shot("p10-core-plugin");
+    assert!(state.get_plugins().iter().any(|p| p.id == "fork" && p.kind == "Core"));
+    assert_eq!(state.get_core_plugins().row_count(), 1);
+    assert_eq!(state.get_cores().iter().map(|c| c.to_string()).collect::<Vec<_>>(), ["sing-box", "Xray", "Fork"]);
+    state.set_core(2);
+    state.invoke_settings_changed();
+    assert_eq!(ctx.store.lock().unwrap().settings.core, crate::engine::xray::Core::Plugin("fork".into()));
+    state.set_current_tab(3);
+    d.pump(300);
+    d.shot("p11-core-settings");
 }
 
 #[test]

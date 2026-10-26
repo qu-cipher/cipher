@@ -4,6 +4,8 @@
 //!   tunnels): it listens on `127.0.0.1:{listen_port}`, and the config dials that instead of its server.
 //! - An **engine** plugin is someone's own VPN core: it serves SOCKS5 on `127.0.0.1:{listen_port}`,
 //!   with sing-box in front (see `engine::chain`), so every mode and the routing rules work.
+//!   With a [`CoreSpec`] it runs the user's ordinary configs too (a sing-box or Xray fork, or an
+//!   engine that reads one of their outbound formats), chosen under Settings → Core.
 //!
 //! Plugins must be open source: a GitHub repository, a license, and release assets with SHA-256
 //! checksums (checked in [`install`]). The developer guide is `docs/plugins.md`.
@@ -25,9 +27,29 @@ pub const MANIFEST_FILE: &str = "plugin.json";
 /// What the app records about an installed plugin, next to its manifest.
 const INSTALL_FILE: &str = "install.json";
 
-/// Official plugins, pinned in the app: (manifest URL, SHA-256 of the manifest).
-/// Only a Cipher release can add to this list, which is what makes a plugin "official".
-pub const OFFICIAL: &[(&str, &str)] = &[];
+/// Official plugins: their manifests are built into the app (and published in the repository's
+/// `plugins/` folder). Only a Cipher release can add to or change this list, which is what makes a
+/// plugin "official".
+pub const OFFICIAL: &[&str] = &[include_str!("../plugins/masterdnsvpn.json")];
+
+/// Where the official manifests are published (for the install record).
+pub const OFFICIAL_SOURCE: &str = "https://raw.githubusercontent.com/qu-cipher/cipher/HEAD/plugins";
+
+/// The official plugins' manifests.
+pub fn official() -> Vec<Manifest> {
+    OFFICIAL.iter().filter_map(|text| Manifest::parse(text).ok()).collect()
+}
+
+/// The built-in manifest text of an official plugin.
+pub fn official_text(id: &str) -> Option<&'static str> {
+    OFFICIAL.iter().copied().find(|text| Manifest::parse(text).is_ok_and(|m| m.id == id))
+}
+
+/// sing-box outbound types the app models itself; core plugins can't claim them as new protocols.
+const BUILT_IN_PROTOCOLS: [&str; 19] = [
+    "direct", "block", "dns", "socks", "http", "shadowsocks", "vmess", "trojan", "naive", "hysteria", "shadowtls", "tuic",
+    "hysteria2", "vless", "anytls", "tor", "ssh", "selector", "urltest",
+];
 
 /// Link schemes the app parses itself; plugins can't claim them.
 const BUILT_IN_SCHEMES: [&str; 15] = [
@@ -61,6 +83,9 @@ pub struct Manifest {
     /// File name for `{config_file}` (some programs care about the extension).
     #[serde(default = "default_config_name")]
     pub config_file_name: String,
+    /// More files written next to `{config_file}` before the plugin starts: file name → template.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub files: BTreeMap<String, String>,
     /// When the plugin is ready to carry traffic.
     pub ready: Ready,
     /// What the plugin forwards (transports: what the config needs; engines: what its SOCKS proxy relays).
@@ -68,6 +93,9 @@ pub struct Manifest {
     /// The plugin needs administrator rights (raw sockets, routes). The user has to allow it separately.
     #[serde(default)]
     pub needs_root: bool,
+    /// Engine plugins that run the user's ordinary configs (listed under Settings → Core).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub core: Option<CoreSpec>,
     /// Engine plugins: link schemes it accepts (`myproto://…`). The whole link is passed as `{link}`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schemes: Vec<String>,
@@ -85,6 +113,25 @@ fn default_config_name() -> String {
 pub enum Kind {
     Transport,
     Engine,
+}
+
+/// What a core plugin reads: `{outbound}` is the selected config's outbound in `format`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CoreSpec {
+    pub format: CoreFormat,
+    /// Outbound types it adds (`format` sing-box): sing-box JSON configs of these types are kept
+    /// for it, and always run on it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CoreFormat {
+    #[serde(rename = "sing-box")]
+    SingBox,
+    #[serde(rename = "xray")]
+    Xray,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -140,6 +187,8 @@ pub enum FieldKind {
     Number,
     Bool,
     Select,
+    /// Several lines of text (a list, one item per line).
+    Lines,
 }
 
 /// A transport plugin chosen for a config (stored with the config), with its field values.
@@ -194,6 +243,10 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+fn plain_file_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains(['/', '\\']) && !name.starts_with('.')
+}
+
 fn valid_key(key: &str) -> bool {
     !key.is_empty() && key.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
 }
@@ -245,8 +298,13 @@ impl Manifest {
                 return Err(format!("{platform}: binary must be a relative path"));
             }
         }
-        if self.config_file_name.is_empty() || self.config_file_name.contains(['/', '\\']) || self.config_file_name.starts_with('.') {
+        if !plain_file_name(&self.config_file_name) {
             return Err("config_file_name must be a plain file name".into());
+        }
+        for name in self.files.keys() {
+            if !plain_file_name(name) || *name == self.config_file_name {
+                return Err(format!("files: `{name}` must be a plain file name other than config_file_name"));
+            }
         }
         if let Ready::Log(text) = &self.ready && text.is_empty() {
             return Err("ready.log must not be empty".into());
@@ -263,6 +321,29 @@ impl Manifest {
             keys.push(&field.key);
             if field.kind == FieldKind::Select && field.options.is_empty() {
                 return Err(format!("select field `{}` has no options", field.key));
+            }
+        }
+
+        if let Some(core) = &self.core {
+            if self.kind != Kind::Engine {
+                return Err("only engine plugins can be cores".into());
+            }
+            if !self.fields.is_empty() || !self.schemes.is_empty() {
+                return Err("core plugins run the user's configs: they have no fields or schemes".into());
+            }
+            if core.format == CoreFormat::Xray && !core.protocols.is_empty() {
+                return Err("new protocols need the sing-box format (configs come from sing-box JSON)".into());
+            }
+            for protocol in &core.protocols {
+                if !valid_id(protocol) {
+                    return Err(format!("invalid protocol `{protocol}` (lowercase letters, digits and -)"));
+                }
+                if BUILT_IN_PROTOCOLS.contains(&protocol.as_str()) {
+                    return Err(format!("`{protocol}` is handled by the app itself"));
+                }
+            }
+            if !self.args.iter().chain(&self.config_template).chain(self.files.values()).any(|t| t.contains("{outbound")) {
+                return Err("{outbound} must appear in args, config_template or files".into());
             }
         }
 
@@ -283,8 +364,8 @@ impl Manifest {
         }
 
         // Placeholders: only the ones this kind gets, and declared fields.
-        let template = self.config_template.as_deref().into_iter();
-        for text in self.args.iter().map(String::as_str).chain(template) {
+        let templates = self.config_template.iter().chain(self.files.values()).map(String::as_str);
+        for text in self.args.iter().map(String::as_str).chain(templates) {
             for name in placeholders(text) {
                 let known = match name.strip_prefix("field.") {
                     Some(key) => keys.contains(&key),
@@ -292,7 +373,8 @@ impl Manifest {
                         "listen_port" | "data_dir" => true,
                         "config_file" => self.config_template.is_some(),
                         "server" | "server_port" => self.kind == Kind::Transport,
-                        "link" => self.kind == Kind::Engine,
+                        "link" => self.kind == Kind::Engine && self.core.is_none(),
+                        "outbound" => self.core.is_some(),
                         _ => false,
                     },
                 };
@@ -301,10 +383,8 @@ impl Manifest {
                 }
             }
         }
-        if !self.args.iter().any(|a| a.contains("{listen_port}"))
-            && !self.config_template.as_deref().is_some_and(|t| t.contains("{listen_port}"))
-        {
-            return Err("{listen_port} must appear in args or config_template".into());
+        if !self.args.iter().chain(&self.config_template).chain(self.files.values()).any(|t| t.contains("{listen_port}")) {
+            return Err("{listen_port} must appear in args, config_template or files".into());
         }
         Ok(())
     }
@@ -326,7 +406,7 @@ impl Manifest {
                 }
             } else {
                 let ok = match field.kind {
-                    FieldKind::Text => true,
+                    FieldKind::Text | FieldKind::Lines => true,
                     FieldKind::Number => value.parse::<f64>().is_ok(),
                     FieldKind::Bool => value == "true" || value == "false",
                     FieldKind::Select => field.options.contains(&value),
@@ -435,14 +515,24 @@ pub fn save_record(data_dir: &Path, id: &str, record: &InstallRecord) -> std::io
 /// Link schemes claimed by installed engine plugins: scheme → plugin id.
 static SCHEMES: LazyLock<RwLock<HashMap<String, String>>> = LazyLock::new(Default::default);
 
-/// Refreshes the scheme table from the installed plugins (on start and after installs/removals).
+/// New protocols of installed core plugins: sing-box outbound type → plugin id.
+static PROTOCOLS: LazyLock<RwLock<HashMap<String, String>>> = LazyLock::new(Default::default);
+
+/// Refreshes the scheme and protocol tables from the installed plugins (on start and after
+/// installs/removals).
 pub fn register_schemes(plugins: &[Installed]) {
-    let table = plugins
-        .iter()
-        .filter(|p| p.manifest.kind == Kind::Engine)
-        .flat_map(|p| p.manifest.schemes.iter().map(|s| (s.clone(), p.manifest.id.clone())))
+    let engines = || plugins.iter().filter(|p| p.manifest.kind == Kind::Engine);
+    let schemes = engines().flat_map(|p| p.manifest.schemes.iter().map(|s| (s.clone(), p.manifest.id.clone()))).collect();
+    let protocols = engines()
+        .flat_map(|p| p.manifest.core.iter().flat_map(|c| &c.protocols).map(|t| (t.clone(), p.manifest.id.clone())))
         .collect();
-    *SCHEMES.write().unwrap() = table;
+    *SCHEMES.write().unwrap() = schemes;
+    *PROTOCOLS.write().unwrap() = protocols;
+}
+
+/// The core plugin that runs `kind` outbounds (a new protocol), if one is installed.
+pub fn protocol_owner(kind: &str) -> Option<String> {
+    PROTOCOLS.read().unwrap().get(kind).cloned()
 }
 
 /// The engine plugin that handles `scheme` links, if one is installed.
@@ -473,6 +563,20 @@ pub(crate) mod tests {
                 {{ "key": "domain", "label": "Tunnel domain", "type": "text", "required": true }},
                 {{ "key": "resolvers", "label": "Resolvers", "type": "select", "options": ["system", "public"], "default": "public" }}
             ]
+        }}"#, platform = platform_key())).unwrap()
+    }
+
+    /// A sing-box fork with a new protocol.
+    pub(crate) fn core() -> Manifest {
+        Manifest::parse(&format!(r#"{{
+            "api": 1, "id": "fork", "name": "Fork", "kind": "engine", "version": "1.0.0",
+            "repository": "https://github.com/example/fork", "license": "GPL-3.0",
+            "assets": {{ "{platform}": {{ "url": "https://github.com/example/fork/releases/download/v1.0.0/fork", "sha256": "{SHA}", "binary": "fork" }} }},
+            "core": {{ "format": "sing-box", "protocols": ["fakeproto"] }},
+            "args": ["run", "-c", "{{config_file}}"],
+            "config_template": "{{\"inbounds\":[{{\"type\":\"socks\",\"listen\":\"127.0.0.1\",\"listen_port\":{{listen_port}}}}],\"outbounds\":[{{outbound}}]}}",
+            "ready": {{ "port": true }},
+            "network": "both"
         }}"#, platform = platform_key())).unwrap()
     }
 
@@ -553,6 +657,87 @@ pub(crate) mod tests {
         assert_eq!(filled["resolvers"], "public");
         let bad = BTreeMap::from([("domain".into(), "x".into()), ("resolvers".into(), "mine".into())]);
         assert!(manifest.fill_fields(&bad).unwrap_err().contains("isn't valid"));
+    }
+
+    #[test]
+    fn core_plugins() {
+        let core = core();
+        assert_eq!(core.core.as_ref().unwrap().format, CoreFormat::SingBox);
+        let broken = |change: fn(&mut Manifest)| {
+            let mut manifest = self::core();
+            change(&mut manifest);
+            manifest.validate().unwrap_err()
+        };
+        assert!(broken(|m| m.kind = Kind::Transport).contains("only engine plugins can be cores"));
+        assert!(broken(|m| m.schemes = vec!["fork".into()]).contains("no fields or schemes"));
+        assert!(broken(|m| m.core.as_mut().unwrap().protocols = vec!["vless".into()]).contains("handled by the app"));
+        assert!(broken(|m| m.core.as_mut().unwrap().protocols = vec!["Bad Name".into()]).contains("invalid protocol"));
+        assert!(broken(|m| m.core.as_mut().unwrap().format = CoreFormat::Xray).contains("sing-box format"));
+        assert!(broken(|m| m.config_template = Some("{listen_port}".into())).contains("{outbound} must appear"));
+        assert!(broken(|m| m.args.push("{link}".into())).contains("unknown placeholder `{link}`"));
+
+        // `{outbound}` belongs to cores only.
+        let mut engine = engine();
+        engine.args.push("{outbound}".into());
+        assert!(engine.validate().unwrap_err().contains("unknown placeholder `{outbound}`"));
+    }
+
+    #[test]
+    fn extra_files_and_lines_fields() {
+        let mut manifest = transport();
+        manifest.files = BTreeMap::from([("list.txt".into(), "{field.domain}\n{listen_port}".into())]);
+        manifest.validate().unwrap();
+        manifest.fields.push(Field {
+            key: "list".into(),
+            label: "List".into(),
+            kind: FieldKind::Lines,
+            hint: String::new(),
+            default: String::new(),
+            required: false,
+            options: Vec::new(),
+        });
+        let values = BTreeMap::from([("domain".into(), "d".into()), ("list".into(), "a\nb\n".into())]);
+        assert_eq!(manifest.fill_fields(&values).unwrap()["list"], "a\nb");
+
+        for name in ["../x", ".hidden", "config.json"] {
+            let mut bad = transport();
+            bad.files = BTreeMap::from([(name.into(), "x".into())]);
+            assert!(bad.validate().unwrap_err().contains("plain file name"), "{name}");
+        }
+        let mut bad = transport();
+        bad.files = BTreeMap::from([("x".into(), "{field.nope}".into())]);
+        assert!(bad.validate().unwrap_err().contains("unknown placeholder"));
+    }
+
+    /// Built-in manifests parse, cover the platforms Cipher ships for, and are published as is.
+    #[test]
+    fn official_manifests() {
+        let official = official();
+        assert_eq!(official.len(), OFFICIAL.len());
+        for manifest in &official {
+            for platform in ["linux-x86_64", "linux-aarch64", "windows-x86_64", "windows-aarch64"] {
+                assert!(manifest.assets.contains_key(platform), "{}: {platform}", manifest.id);
+            }
+            let published = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins").join(format!("{}.json", manifest.id));
+            assert_eq!(fs::read_to_string(published).unwrap(), official_text(&manifest.id).unwrap());
+        }
+        assert!(official_text("nope").is_none());
+
+        // MasterDnsVPN: the rendered config is the TOML the client expects.
+        let masterdns = official.iter().find(|m| m.id == "masterdnsvpn").unwrap();
+        let fields = BTreeMap::from([
+            ("domains".into(), "v.example.com".into()),
+            ("key".into(), "k\"ey".into()),
+            ("resolvers".into(), "8.8.8.8\n1.1.1.1:5353".into()),
+        ]);
+        let mut values = field_values(&masterdns.fill_fields(&fields).unwrap());
+        values.insert("listen_port".into(), "40123".into());
+        let config = render(masterdns.config_template.as_deref().unwrap(), &values).unwrap();
+        assert!(config.contains("LISTEN_PORT = 40123\n"));
+        assert!(config.contains("DATA_ENCRYPTION_METHOD = 1\n"));
+        assert!(config.contains("ENCRYPTION_KEY = \"k\\\"ey\"\n"));
+        assert_eq!(render(&masterdns.files["client_resolvers.txt"], &values).unwrap(), "8.8.8.8\n1.1.1.1:5353\n");
+        assert_eq!(masterdns.fill_fields(&BTreeMap::new()).unwrap_err(), "Tunnel domain is required");
     }
 
     #[test]

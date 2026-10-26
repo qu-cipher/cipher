@@ -5,7 +5,10 @@
 //! built in that folder (its `binary` path, relative to the manifest), without the GitHub and
 //! checksum checks. Such plugins are marked "Development" in the app.
 
-use super::{InstallRecord, Installed, Kind, MANIFEST_FILE, Manifest, OFFICIAL, binary_name, github_repo, plugins_dir, save_record};
+use super::{
+    InstallRecord, Installed, Kind, MANIFEST_FILE, Manifest, OFFICIAL, OFFICIAL_SOURCE, binary_name, github_repo, official_text, plugins_dir,
+    save_record,
+};
 use crate::engine::install::{download, file_sha256, verify_sha256};
 use crate::engine::{paths, process::hide_console};
 use serde_json::Value;
@@ -95,9 +98,8 @@ pub fn review(source: &str) -> Result<Review, String> {
         }
     };
     let manifest = Manifest::parse(&text)?;
-    let digest = ring::digest::digest(&ring::digest::SHA256, text.as_bytes());
-    let digest: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    let official = OFFICIAL.iter().any(|(_, sha)| *sha == digest);
+    // The exact text of a built-in manifest (e.g. added by its published URL).
+    let official = OFFICIAL.contains(&text.as_str());
 
     // Developer mode: a local folder whose program is built right there.
     let development = local_dir.as_ref().is_some_and(|dir| {
@@ -116,6 +118,21 @@ pub fn review(source: &str) -> Result<Review, String> {
         warnings.push("On Windows, Cipher runs as administrator, so every plugin does too.".into());
     }
     Ok(Review { manifest, text, source: source.trim().to_owned(), official, development, warnings, local_dir })
+}
+
+/// Reviews an official plugin from its built-in manifest (nothing to fetch but the repository check).
+pub fn review_official(id: &str) -> Result<Review, String> {
+    let text = official_text(id).ok_or_else(|| format!("`{id}` isn't an official plugin"))?;
+    let manifest = Manifest::parse(text)?;
+    if manifest.asset().is_none() {
+        return Err(format!("{} has no build for this system ({})", manifest.name, super::platform_key()));
+    }
+    let mut warnings = check_repository(&manifest)?;
+    if cfg!(windows) {
+        warnings.push("On Windows, Cipher runs as administrator, so every plugin does too.".into());
+    }
+    let source = format!("{OFFICIAL_SOURCE}/{id}.json");
+    Ok(Review { manifest, text: text.to_owned(), source, official: true, development: false, warnings, local_dir: None })
 }
 
 /// The repository must exist, be public, and carry the license the manifest claims.

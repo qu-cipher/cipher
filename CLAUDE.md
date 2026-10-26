@@ -45,9 +45,10 @@ src/
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
                      PsiphonSource {ServerEntry(hex) → "server_entry", Network(map) → "network"} (serde-flattened),
                      ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing,
-                     core: xray::Core {SingBox(default), Xray}, group_configs=true,
+                     core: xray::Core {SingBox(default), Xray, Plugin(id)}, group_configs=true,
                      tls_fragment, udp_noise: anti-DPI toggles, default off);
-                     Profile::group() = group label in the Configs list ("VLESS", …, "Psiphon")
+                     Profile::group() = group label in the Configs list ("VLESS", …, "Psiphon");
+                     Profile::Custom{name, outbound: Value} = a core plugin's new protocol (raw sing-box outbound), group = its type
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
                      Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
   store.rs           Store persisted as state.json (atomic write, 0600; corrupt → .bak): settings, manual entries,
@@ -69,7 +70,9 @@ src/
   engine/psiphon.rs  PsiphonEngine: psiphon-tunnel-core (as user, JSON notices → psiphon.log) then, once a `Tunnels` notice
                      count ≥ 1, an inner SingBoxEngine with a socks outbound to it + process_name→direct rule;
                      client_config: ServerEntry → TargetServerEntry + DisableRemoteServerListFetcher; Network → as imported
-  engine/plugin.rs   PluginEngine (Profile::Plugin: plugin serves SOCKS on a free port → Chain to sing-box) and
+  engine/plugin.rs   PluginEngine (Profile::Plugin: plugin serves SOCKS on a free port → Chain to sing-box; also core plugins:
+                     runs_on_core()/engine::kind_for() pick it for Custom configs and, with Core::Plugin, what its format carries;
+                     {outbound} = generate::proxy_outbound / xray::proxy_outbound JSON) and
                      Transported (wraps any engine: plugin first, then the config rewritten to 127.0.0.1:<port>; rewrite() keeps
                      tls.server_name / ws Host / Xray serverName+host on the ORIGINAL server). e2e tests (ignored) use sing-box as fake plugins
   engine/elevated.rs Elevated: one pkexec for several root processes: `cipher_client --elevated-helper` (main.rs) runs as root,
@@ -79,10 +82,14 @@ src/
   engine/install.rs  engine detection/versions; downloads pinned sing-box + Xray (XRAY_VERSION zip, `zip` crate) releases and pinned Psiphon binary
                      (psiphon-tunnel-core-binaries @ PSIPHON_COMMIT; SHA-256 verified) into <data>/bin
   plugin.rs          Manifest (plugin.json, deny_unknown_fields, validate(): GitHub repo, asset URLs under <repo>/releases/download/,
-                     sha256, placeholders `{name}`/`{name:json}`, other braces literal), fields, Installed/InstallRecord
+                     sha256, placeholders `{name}`/`{name:json}`, other braces literal), `files` (extra templates in {data_dir}),
+                     fields (text/number/bool/select/lines), Installed/InstallRecord
                      (<data>/plugins/<id>/{plugin.json,install.json,cipher-plugin-<id>}), TransportUse, scheme registry (global, for
-                     link.rs), OFFICIAL (pinned, empty for now). Public dev guide: docs/plugins.md
-  plugin/install.rs  review() (fetch manifest: URL, GitHub repo → raw HEAD/plugin.json, or local file; GitHub API: public + license
+                     link.rs), OFFICIAL = include_str! of plugins/<id>.json (official = exact text match; the list shows them
+                     with "Add", "Update" when the built-in one differs). `core: {format: sing-box|xray, protocols}` = core plugin
+                     (engine kind; no fields/schemes; `{outbound}` placeholder); PROTOCOLS registry → protocol_owner().
+                     Public dev guide: docs/plugins.md
+  plugin/install.rs  review() / review_official(id) (fetch manifest: URL, GitHub repo → raw HEAD/plugin.json, or local file; GitHub API: public + license
                      spdx match; archived = warning), install() (download, sha256, extract zip/tar, swap folder), remove();
                      CIPHER_PLUGIN_DEV=1 = local folder binary, no checks ("Development")
   import.rs          ImportError, decode_base64 (all variants), re-exports
@@ -101,6 +108,7 @@ ui/
   theme.slint        Theme colors (always dark)
   panels/            connect, library (tabs: subscriptions, configs, settings), configs, subscriptions, settings
   components/        buttons, config-item, group-header, rule-item, sub-item, tab-bar, title-bar, sheet
+plugins/             official manifests (masterdnsvpn.json: engine, TOML config + client_resolvers.txt via `files`, `-domains` flag)
 assets/              Geist.ttf, Mdi*.svg icons
 tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2) — must round-trip unchanged
 ```
@@ -153,14 +161,22 @@ v0.3.0 = Xray core + anti-DPI toggles (TLS fragment, UDP noise). Next-version id
 Maybe later: built-in public VPN servers for general use (user's idea, not planned yet).
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 97 tests passing (+10 ignored) at last count (plugin system 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 102 tests passing (+12 ignored) at last count (core plugins 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
 - Plugin system (2026-10-26, uncommitted at first): unit + e2e tests (sing-box as fake engine/transport plugins, root path via an
   in-process helper) pass; real `--elevated-helper` mode checked over stdin without pkexec. NOT yet verified: a real pkexec prompt
-  with a root plugin (one prompt for plugin + TUN), real GitHub install of a published plugin, Windows. No official plugins yet
-  (MasterDnsVPN first, then sni-spoofing-rust; see docs/plugins-plan.md, private).
+  with a root plugin (one prompt for plugin + TUN), real GitHub install of a published plugin, Windows.
+- Official MasterDnsVPN plugin (2026-10-26, pinned release v2026.10.26.100415-5f83ee9): the real client (offline, in
+  `unshare -rn`, resolvers on 127.0.0.1) accepts the rendered config/resolvers and exits on SIGTERM
+  (`MASTERDNSVPN_BINARY=… cargo test masterdnsvpn_accepts -- --ignored`). Its SOCKS port opens only once a session exists
+  (so `ready: port` = tunnel up); with no working resolver it retries forever (Cipher's start timeout ends it). Engine-plugin
+  configs are editable (connect panel → Settings). A real connection to the user's server is for the user to verify.
+  Next official plugin: sni-spoofing-rust (see docs/plugins-plan.md, private).
+- Core plugins (2026-10-26, user's design: forks or new engines = engines, chained behind official sing-box, picked in
+  Settings → Core; new protocols via sing-box JSON only, no link converter yet): unit tests + e2e with sing-box as a fake
+  fork pass. No real fork tested yet. Xray JSON import (for xray-format protocols) not built.
 - Xray (2026-10-26): link parsing, converter and 10 config shapes pass the real `xray run -test` (v2rayN's 26.9.9);
   chained sing-box config passes `sing-box check`. Real connections (XHTTP etc.) are for the user to verify.
 - Anti-DPI (2026-10-26): configs validated by both engines; whether fragmenting/noise actually helps on real networks is unverified.

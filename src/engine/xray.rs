@@ -21,13 +21,15 @@ const SOCKS_TAG: &str = "socks-in";
 /// Tag of Xray's built-in DNS traffic; routed direct.
 const DNS_TAG: &str = "dns-direct";
 
-/// Which engine runs VLESS/VMess/Trojan/Shadowsocks configs that both could run.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Which engine runs the user's ordinary configs: VLESS/VMess/Trojan/Shadowsocks on either
+/// built-in one, or a core plugin (its id; see `plugin::CoreSpec`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Core {
     #[default]
     SingBox,
     Xray,
+    Plugin(String),
 }
 
 /// The profile to connect with: with the Xray core, sing-box proxy configs Xray can run
@@ -42,16 +44,26 @@ pub fn effective<'a>(profile: &'a Profile, settings: &Settings) -> Cow<'a, Profi
     Cow::Borrowed(profile)
 }
 
+/// A config's outbound as the proxy: tagged `proxy`, with the anti-DPI masks that are on.
+/// Core plugins of the Xray format get the same outbound.
+pub fn proxy_outbound(outbound: &XrayOutbound, settings: &Settings) -> XrayOutbound {
+    let mut outbound = outbound.clone();
+    outbound.tag = PROXY_TAG.into();
+    let kcp = outbound.network() == Network::Kcp;
+    let finalmask = finalmask(settings, kcp);
+    if finalmask.is_some() || outbound.stream.is_some() {
+        outbound.stream.get_or_insert_default().finalmask = finalmask;
+    }
+    outbound
+}
+
 /// The whole Xray config: a SOCKS inbound for sing-box, the proxy outbound, and a direct one.
 /// Server domains resolve through Xray's own DNS (the direct DNS server, sent directly): in Tunnel
 /// mode the system resolver would go through the TUN and back into Xray before it's connected.
 fn build_config(outbound: &XrayOutbound, settings: &Settings, socks_port: u16) -> Value {
-    let mut outbound = outbound.clone();
-    outbound.tag = PROXY_TAG.into();
-    let kcp = outbound.network() == Network::Kcp;
+    let mut outbound = proxy_outbound(outbound, settings);
     let stream = outbound.stream.get_or_insert_default();
     stream.sockopt = Some(Sockopt { domain_strategy: Some(DomainStrategy::UseIP) });
-    stream.finalmask = finalmask(settings, kcp);
 
     json!({
         "log": { "loglevel": log_level(settings.log_level) },

@@ -30,6 +30,20 @@ const SCHEMA_URL: &str = "https://sing-box.sagernet.org/schema.json";
 const TUN_ADDRESS: [&str; 2] = ["172.18.0.1/30", "fdfe:dcba:9876::1/126"];
 pub const PROXY_LISTEN: &str = "127.0.0.1";
 
+/// A config's outbound as the proxy: tagged `proxy`, and with TLS fragmenting when it's on.
+/// Core plugins of the sing-box format get the same outbound.
+pub fn proxy_outbound(outbound: &Outbound, settings: &Settings) -> Outbound {
+    let mut outbound = outbound.clone();
+    *outbound.tag_mut() = PROXY_TAG.into();
+    if settings.tls_fragment
+        && let Some(tls) = outbound.tcp_tls_mut()
+        && tls.enabled == Some(true)
+    {
+        tls.fragment = Some(true);
+    }
+    outbound
+}
+
 /// Traffic from `direct_processes` always goes direct. A chained engine (Psiphon) needs that
 /// in Tunnel mode, or its own connections would loop back into it.
 pub fn build_config(
@@ -42,17 +56,7 @@ pub fn build_config(
     let mut endpoints = Vec::new();
 
     match profile {
-        Profile::Proxy { outbound, .. } => {
-            let mut outbound = outbound.clone();
-            *outbound.tag_mut() = PROXY_TAG.into();
-            if settings.tls_fragment
-                && let Some(tls) = outbound.tcp_tls_mut()
-                && tls.enabled == Some(true)
-            {
-                tls.fragment = Some(true);
-            }
-            outbounds.push(outbound);
-        }
+        Profile::Proxy { outbound, .. } => outbounds.push(proxy_outbound(outbound, settings)),
         Profile::WireGuard { endpoint, .. } => {
             let mut endpoint = endpoint.clone();
             endpoint.tag = PROXY_TAG.into();
@@ -61,7 +65,7 @@ pub fn build_config(
         Profile::OpenVpn { .. } => return Err(EngineError::WrongEngine(EngineKind::OpenVpn)),
         Profile::Psiphon { .. } => return Err(EngineError::WrongEngine(EngineKind::Psiphon)),
         Profile::Xray { .. } => return Err(EngineError::WrongEngine(EngineKind::Xray)),
-        Profile::Plugin { .. } => return Err(EngineError::WrongEngine(EngineKind::Plugin)),
+        Profile::Plugin { .. } | Profile::Custom { .. } => return Err(EngineError::WrongEngine(EngineKind::Plugin)),
     }
 
     outbounds.push(Outbound::Direct(DirectOutbound {

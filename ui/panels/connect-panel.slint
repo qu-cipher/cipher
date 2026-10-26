@@ -209,6 +209,25 @@ export component ConnectPanel inherits Rectangle {
             }
         }
 
+        // The selected engine-plugin config's settings.
+        if AppState.plugin-config-editable: HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: "Plugin config";
+                font-size: 12px;
+                color: Theme.text-muted;
+                vertical-alignment: center;
+            }
+
+            PillButton {
+                text: "Settings";
+                enabled: !root.busy;
+                clicked => { AppState.edit-plugin-config(); }
+            }
+        }
+
         if AppState.error != "": Text {
             text: AppState.error;
             font-size: 11px;

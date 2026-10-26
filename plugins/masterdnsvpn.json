@@ -1,0 +1,59 @@
+{
+  "api": 1,
+  "id": "masterdnsvpn",
+  "name": "MasterDnsVPN",
+  "kind": "engine",
+  "version": "2026.10.26",
+  "description": "A DNS tunnel to your own MasterDnsVPN server, for networks where little but DNS gets through. You need the server and a domain delegated to it.",
+  "repository": "https://github.com/masterking32/MasterDnsVPN",
+  "license": "MIT",
+  "assets": {
+    "linux-x86_64": {
+      "url": "https://github.com/masterking32/MasterDnsVPN/releases/download/v2026.10.26.100415-5f83ee9/MasterDnsVPN_Client_Linux_AMD64.tar.gz",
+      "sha256": "8a983ac62407bf933fdb485ba5581b5a7eb3f6d0b114703c3f767502cb9c4d7b",
+      "binary": "MasterDnsVPN_Client_Linux_AMD64_v2026.10.26.100415-5f83ee9"
+    },
+    "linux-aarch64": {
+      "url": "https://github.com/masterking32/MasterDnsVPN/releases/download/v2026.10.26.100415-5f83ee9/MasterDnsVPN_Client_Linux_ARM64.tar.gz",
+      "sha256": "600de7f6846ae4fc57688c9e404e39159378e6a68032ab247a079b765f049b41",
+      "binary": "MasterDnsVPN_Client_Linux_ARM64_v2026.10.26.100415-5f83ee9"
+    },
+    "windows-x86_64": {
+      "url": "https://github.com/masterking32/MasterDnsVPN/releases/download/v2026.10.26.100415-5f83ee9/MasterDnsVPN_Client_Windows_AMD64.zip",
+      "sha256": "ed4761fdaf9e77298cf7258c23d01c2825fb28735976c61234a1332bea8d904e",
+      "binary": "MasterDnsVPN_Client_Windows_AMD64_v2026.10.26.100415-5f83ee9.exe"
+    },
+    "windows-aarch64": {
+      "url": "https://github.com/masterking32/MasterDnsVPN/releases/download/v2026.10.26.100415-5f83ee9/MasterDnsVPN_Client_Windows_ARM64.zip",
+      "sha256": "f8ca5707f7b252b6d63104814fbf8da92e26d6f06b5198dd04270de879c822be",
+      "binary": "MasterDnsVPN_Client_Windows_ARM64_v2026.10.26.100415-5f83ee9.exe"
+    }
+  },
+  "args": ["-config", "{config_file}", "-domains", "{field.domains}"],
+  "config_template": "PROTOCOL_TYPE = \"SOCKS5\"\nLISTEN_IP = \"127.0.0.1\"\nLISTEN_PORT = {listen_port}\nSOCKS5_AUTH = false\nLOCAL_DNS_ENABLED = false\nDATA_ENCRYPTION_METHOD = {field.encryption}\nENCRYPTION_KEY = {field.key:json}\nRESOLVER_BALANCING_STRATEGY = 3\nPACKET_DUPLICATION_COUNT = 3\nSETUP_PACKET_DUPLICATION_COUNT = 4\nLOG_LEVEL = \"INFO\"\n",
+  "config_file_name": "client_config.toml",
+  "files": {
+    "client_resolvers.txt": "{field.resolvers}\n"
+  },
+  "ready": { "port": true },
+  "network": "tcp",
+  "fields": [
+    {
+      "key": "domains", "label": "Tunnel domain", "type": "text", "required": true,
+      "hint": "Your server's DOMAIN, e.g. v.example.com. Several are comma-separated and must all lead to the same server."
+    },
+    {
+      "key": "encryption", "label": "Encryption method", "type": "select",
+      "options": ["0", "1", "2", "3", "4", "5"], "default": "1",
+      "hint": "The server's DATA_ENCRYPTION_METHOD: 0 none, 1 XOR, 2 ChaCha20, 3/4/5 AES-128/192/256-GCM."
+    },
+    {
+      "key": "key", "label": "Encryption key", "type": "text",
+      "hint": "The contents of the server's key file. Not needed with method 0."
+    },
+    {
+      "key": "resolvers", "label": "DNS resolvers", "type": "lines", "required": true,
+      "hint": "One per line: 8.8.8.8, 1.1.1.1:5353, 192.168.1.0/30 or [2001:4860:4860::8888]:53. More working resolvers make the tunnel faster and steadier."
+    }
+  ]
+}

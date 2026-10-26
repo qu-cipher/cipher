@@ -4,7 +4,8 @@ import { AppState } from "../state.slint";
 import { PillButton } from "../components/buttons.slint";
 import { PluginItem } from "../components/plugin-item.slint";
 
-// Installed plugins: transports (run under a config) and engines (their own configs).
+// Installed plugins: transports (run under a config) and engines (their own configs), then the
+// official plugins that aren't added yet.
 export component PluginsPanel inherits VerticalLayout {
     spacing: 8px;
 
@@ -54,6 +55,7 @@ export component PluginsPanel inherits VerticalLayout {
             PluginItem {
                 data: plugin;
                 open-repository => { AppState.open-url(plugin.repository); }
+                add => { AppState.add-official-plugin(plugin.id); }
                 new-config => { AppState.new-plugin-config(plugin.id); }
                 allow-root => { AppState.allow-plugin-root(plugin.id); }
                 revoke-root => { AppState.revoke-plugin-root(plugin.id); }

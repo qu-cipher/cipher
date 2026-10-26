@@ -47,6 +47,9 @@ pub enum Profile {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         fields: BTreeMap<String, String>,
     },
+    /// A config in a protocol only a core plugin knows (see `plugin::CoreSpec`): its sing-box
+    /// outbound, kept as is. Runs on the plugin that declares its `type`.
+    Custom { name: String, outbound: serde_json::Value },
 }
 
 /// Where an OpenVPN profile's config lives.
@@ -94,12 +97,13 @@ impl Profile {
             | Profile::OpenVpn { name, .. }
             | Profile::Psiphon { name, .. }
             | Profile::Xray { name, .. }
-            | Profile::Plugin { name, .. } => name,
+            | Profile::Plugin { name, .. }
+            | Profile::Custom { name, .. } => name,
         }
     }
 
     /// Short protocol label for the UI.
-    pub fn protocol(&self) -> &'static str {
+    pub fn protocol(&self) -> &str {
         match self {
             Profile::Proxy { outbound, .. } => match outbound {
                 Outbound::Direct(_) => "direct",
@@ -126,11 +130,12 @@ impl Profile {
                 XrayProtocol::Freedom(_) => "direct",
             },
             Profile::Plugin { .. } => "plugin",
+            Profile::Custom { .. } => self.custom_type(),
         }
     }
 
     /// Group in the Configs list: the protocol's full name.
-    pub fn group(&self) -> &'static str {
+    pub fn group(&self) -> &str {
         match self {
             Profile::Proxy { outbound, .. } => match outbound {
                 Outbound::Direct(_) => "Direct",
@@ -157,6 +162,15 @@ impl Profile {
                 XrayProtocol::Freedom(_) => "Direct",
             },
             Profile::Plugin { .. } => "Plugins",
+            Profile::Custom { .. } => self.custom_type(),
+        }
+    }
+
+    /// A custom config's outbound type (its protocol).
+    pub fn custom_type(&self) -> &str {
+        match self {
+            Profile::Custom { outbound, .. } => outbound.get("type").and_then(serde_json::Value::as_str).unwrap_or("custom"),
+            _ => "",
         }
     }
 
@@ -170,6 +184,11 @@ impl Profile {
         if let Profile::Xray { outbound, .. } = self {
             let (server, port) = outbound.server().filter(|_| outbound.network() != XrayNetwork::Kcp)?;
             return Some((server.into(), port));
+        }
+        if let Profile::Custom { outbound, .. } = self {
+            let server = outbound.get("server")?.as_str()?;
+            let port = outbound.get("server_port")?.as_u64()?;
+            return Some((server.into(), u16::try_from(port).ok()?));
         }
         let Profile::Proxy { outbound, .. } = self else { return None };
         let (server, port) = match outbound {
@@ -191,7 +210,7 @@ impl Profile {
             Profile::OpenVpn { .. } => EngineKind::OpenVpn,
             Profile::Psiphon { .. } => EngineKind::Psiphon,
             Profile::Xray { .. } => EngineKind::Xray,
-            Profile::Plugin { .. } => EngineKind::Plugin,
+            Profile::Plugin { .. } | Profile::Custom { .. } => EngineKind::Plugin,
         }
     }
 }
