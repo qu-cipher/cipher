@@ -36,6 +36,7 @@ pub fn parse_link(link: &str) -> Result<Profile, ImportError> {
         "vmess" => vmess::parse(link),
         "ss" => shadowsocks::parse(link),
         "ovpn" | "openvpn" => crate::import::openvpn::parse_ovpn_link(link),
+        "psiphon" => crate::import::psiphon::parse_server_entry(link),
 
         "vless" => vless::parse(&ShareLink::parse(link)?),
         "trojan" => trojan::parse(&ShareLink::parse(link)?),

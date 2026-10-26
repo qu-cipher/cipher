@@ -49,8 +49,6 @@ pub enum EngineError {
     #[error("couldn't install the engine: {0}")]
     Install(String),
 
-    #[error("Psiphon needs its network config: import it in Settings → Psiphon")]
-    PsiphonNetworkMissing,
 
     #[error("could not determine the app data directory")]
     NoDataDir,

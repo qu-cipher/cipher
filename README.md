@@ -10,8 +10,8 @@ for an existing engine, and runs that engine as a child process:
 - **[Xray-core](https://github.com/XTLS/Xray-core)** for what sing-box can't run (XHTTP/SplitHTTP, mKCP,
   VLESS encryption), and optionally for all VLESS/VMess/Trojan/Shadowsocks configs; chained behind sing-box
 - **OpenVPN** for `.ovpn` files and `ovpn://` links
-- **[Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core)** (its ConsoleClient) for the built-in
-  *Psiphon Tunnel* entry, chained behind sing-box. **Temporarily disabled** (see below)
+- **[Psiphon](https://github.com/Psiphon-Labs/psiphon-tunnel-core)** (its ConsoleClient) for your own Psiphon
+  servers, chained behind sing-box
 
 > **Status:** a personal project, early but usable. Tested on Linux (CachyOS) with real servers in
 > Tunnel and proxy modes. Windows builds and passes the tests in CI but hasn't been run on Windows yet.
@@ -36,11 +36,13 @@ for an existing engine, and runs that engine as a child process:
   *Settings → Engines → Core* can also run every VLESS/VMess/Trojan/Shadowsocks config on Xray instead of
   sing-box, except the ones Xray can't run the same way (insecure TLS, h2/QUIC, multiplex, plain VLESS/Trojan).
   sing-box stays in front of Xray, so all three modes and the routing rules work the same.
-- **Psiphon Tunnel** (*temporarily disabled*: Psiphon doesn't publish a config for its public network, it's
-  requested from the Psiphon team. The code stays, and `psiphon::ENABLED` turns it back on): a built-in entry in the Configs list. Psiphon finds its own servers. Import a Psiphon
-  client config (the network part: `PropagationChannelId`, `SponsorId`, server list URLs and keys) in
-  *Settings → Psiphon* and pick an exit country there. sing-box runs in front of it, so all three modes and
-  the routing rules work. Psiphon's proxy only forwards TCP, so UDP apps fall back to TCP.
+- **Psiphon (your own servers):** add a self-hosted [psiphond](https://github.com/Psiphon-Labs/psiphon-tunnel-core/tree/master/psiphon/server)
+  server by pasting the contents of the `server-entry.dat` that `psiphond generate` writes (bare hex, or a
+  `psiphon://<hex>` link) into *Add*, or by importing the file. A Psiphon client JSON config for a private
+  Psiphon network (`PropagationChannelId`, `SponsorId`, server lists) can be imported too. Each becomes a
+  config in the *Psiphon* group. sing-box runs in front of Psiphon, so all three modes and the routing rules
+  work. Psiphon's proxy only forwards TCP, so UDP apps fall back to TCP. Psiphon's public network isn't
+  included: its config is only available from the Psiphon team.
 - **Split tunneling and routing rules** (sing-box configs, all modes): send domains, keywords, IPs/CIDRs,
   ports, apps (process name or path), and geosite/geoip lists through the VPN, direct, or block them.
   Rules are checked top to bottom. One-click presets: Iran / China / Russia direct, Block ads. The default
@@ -49,7 +51,7 @@ for an existing engine, and runs that engine as a child process:
 - **Anti-DPI options** (*Settings → Anti-DPI*): **Fragment TLS hello** splits the TLS handshake into small,
   delayed pieces so filters can't read the server name (TCP configs on sing-box and Xray). **UDP noise**
   sends random packets before an mKCP connection (Xray).
-- **Configs grouped by protocol** (VLESS, Trojan, …, with *Built-In* for Psiphon); groups fold, and the
+- **Configs grouped by protocol** (VLESS, Trojan, …, Psiphon); groups fold, and the
   grouping toggles from the Configs toolbar.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
   (DNS-over-HTTPS through the tunnel).
@@ -75,8 +77,7 @@ The app doesn't handle these yet:
 - **openvpn**, only for `.ovpn` configs (from your package manager)
 - **Xray**, only for Xray configs or the Xray core (tested with 26.9.9 and 26.10.21; *Settings → Engines → Download*
   installs 26.10.21)
-- **psiphon-tunnel-core**, only for Psiphon Tunnel, which is disabled for now (it needs a network config
-  from the Psiphon team)
+- **psiphon-tunnel-core**, only for Psiphon servers (*Settings → Engines → Download*)
 
 The app looks for engines next to its own executable first, then in `<data dir>/bin`, then in `PATH`.
 
@@ -160,7 +161,7 @@ artifacts. Engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app download
 | `src/profile.rs` | `Profile` (Proxy / WireGuard / OpenVPN), `ConnectionMode`, `Settings` |
 | `src/routing.rs` | Routing rules, presets and the default route; input parsing and normalization |
 | `src/store.rs` | Saved state (`state.json`): configs, subscriptions, selection, settings |
-| `src/import/` | Share-link parsers (one file per protocol in `link/`), WireGuard/OpenVPN files, subscriptions, sing-box JSON |
+| `src/import/` | Share-link parsers (one file per protocol in `link/`), WireGuard/OpenVPN files, Psiphon server entries and configs, subscriptions, sing-box JSON |
 | `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Xray (`xray.rs`, `xray/`) and Psiphon engines chained behind sing-box (`chain.rs`) |
 | `src/engine/singbox/config/` | Typed serde model of the sing-box config (client-side subset, 1.12+ format only) |
 | `src/engine/singbox/generate.rs` | Builds the sing-box config from a profile and settings (routing rules in `generate/routing.rs`) |

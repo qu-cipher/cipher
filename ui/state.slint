@@ -144,19 +144,10 @@ export global AppState {
     // Engine for VLESS/VMess/Trojan/Shadowsocks configs both can run; same order as `CORES` in Rust.
     out property <[string]> cores: ["sing-box", "Xray"];
     in-out property <int> core;
-    // Psiphon is switched off in Rust (`psiphon::ENABLED`): hides its engine row and settings.
-    in property <bool> psiphon-enabled;
     in property <string> psiphon-status;
     in property <bool> psiphon-installed;
     // downloading Psiphon
     in property <bool> psiphon-busy;
-
-    // ── Psiphon ──
-    // "Imported · channel …" or what to do
-    in property <string> psiphon-network;
-    in property <[string]> psiphon-regions: ["Fastest"];
-    // index into `psiphon-regions`
-    in-out property <int> psiphon-region;
 
     callback toggle-connection();
     callback mode-changed();
@@ -192,8 +183,6 @@ export global AppState {
     callback install-singbox();
     callback install-xray();
     callback install-psiphon();
-    // file dialog for a Psiphon JSON client config
-    callback import-psiphon-network();
     callback open-data-dir();
     // opens a link in the default browser
     callback open-url(string);

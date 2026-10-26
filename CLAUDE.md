@@ -5,8 +5,8 @@ protocols itself: it imports configs, then drives external engines as child proc
 - **sing-box** (≥ 1.12, pinned/tested 1.14.3) for proxy protocols and WireGuard
 - **xray** (Xray-core ≥ 26, pinned 26.10.21) for XHTTP/mKCP/VLESS-encryption links and the optional Xray core, chained behind sing-box
 - **openvpn** binary for `.ovpn` files (Tunnel mode only)
-- **psiphon-tunnel-core** (Psiphon ConsoleClient) for the built-in "Psiphon Tunnel" entry, chained behind sing-box.
-  **Disabled** via `engine::psiphon::ENABLED = false` (hides the entry, engine row and settings; code kept)
+- **psiphon-tunnel-core** (Psiphon ConsoleClient) for the user's own Psiphon servers (self-hosted psiphond server
+  entries, or a private network's client JSON), chained behind sing-box. Psiphon's public network is NOT supported
 
 Crate name `cipher_client`, edition 2024 (let-chains are used). README.md is the public overview: keep its
 feature list, "Not supported" list and layout table in sync when those change.
@@ -39,20 +39,20 @@ Use `Toggle` (buttons.slint) instead of the Fluent `Switch`.
 src/
   main.rs            mod decls + slint::include_modules!(); calls app::run()
   app.rs   (~1100 lines) UI glue: callbacks, threads, list refresh, connect/disconnect, settings, engines
-  app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, Psiphon, grouped
-                     Configs list; never connects: safe)
-  profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name}, Xray{name, outbound: XrayOutbound}},
+  app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, anti-DPI, grouped
+                     Configs list with a Psiphon entry; never connects: safe)
+  profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name, source: PsiphonSource}, Xray{name, outbound: XrayOutbound}},
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
+                     PsiphonSource {ServerEntry(hex) → "server_entry", Network(map) → "network"} (serde-flattened),
                      ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing,
-                     psiphon: PsiphonSettings {network: imported JSON map, region},
                      core: xray::Core {SingBox(default), Xray}, group_configs=true,
                      tls_fragment, udp_noise: anti-DPI toggles, default off);
-                     Profile::group() = group label in the Configs list ("VLESS", …, "Built-In" for Psiphon)
+                     Profile::group() = group label in the Configs list ("VLESS", …, "Psiphon")
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
                      Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
   store.rs           Store persisted as state.json (atomic write, 0600; corrupt → .bak): settings, manual entries,
                      subscriptions (with entries, usage, updated_at), selected id, next_id;
-                     built-in entries (Psiphon, id PSIPHON_ID=0) come first in all_entries(), not saved, not removable
+                     Store::migrated: an old settings.psiphon.network (≤0.3) becomes a manual Psiphon config on load
   engine.rs          Engine trait (start/stop/status/ready), EngineKind, Status, EngineError, engine_for()
   engine/process.rs  child process → log file; SIGTERM then kill after 5s; stops on Drop; last log line = error msg;
                      spawn_elevated: Linux Tunnel mode via `pkexec /bin/sh` wrapper, stopped by closing its stdin pipe
@@ -67,7 +67,8 @@ src/
   engine/xray/config.rs   serde model of an Xray outbound (vless/vmess/trojan/shadowsocks + streamSettings, finalmask)
   engine/xray/convert.rs  sing-box Outbound → XrayOutbound for the Xray core (None = stays on sing-box)
   engine/psiphon.rs  PsiphonEngine: psiphon-tunnel-core (as user, JSON notices → psiphon.log) then, once a `Tunnels` notice
-                     count ≥ 1, an inner SingBoxEngine with a socks outbound to it + process_name→direct rule; REGIONS
+                     count ≥ 1, an inner SingBoxEngine with a socks outbound to it + process_name→direct rule;
+                     client_config: ServerEntry → TargetServerEntry + DisableRemoteServerListFetcher; Network → as imported
   engine/openvpn.rs  OpenVpnEngine: --cd/--config, Inline configs → temp <data>/openvpn.ovpn (0600, removed on stop), temp auth file for auth-user-pass, ready = "Initialization Sequence Completed", AUTH_FAILED detection
   engine/install.rs  engine detection/versions; downloads pinned sing-box + Xray (XRAY_VERSION zip, `zip` crate) releases and pinned Psiphon binary
                      (psiphon-tunnel-core-binaries @ PSIPHON_COMMIT; SHA-256 verified) into <data>/bin
@@ -79,6 +80,7 @@ src/
   import/singbox_json.rs  sing-box JSON → profiles (skips direct/block/dns/selector/urltest)
   import/wireguard.rs     .conf → WireGuard endpoint
   import/openvpn.rs       .ovpn file / ovpn:// link → Profile::OpenVpn, needs_credentials()
+  import/psiphon.rs       server entries (hex / psiphon://<hex>, also subscription lines) + client JSON configs → Profile::Psiphon
   import/xray.rs          links needing Xray (xhttp/splithttp/kcp/mkcp, VLESS encryption) → Profile::Xray; hooked in vless/vmess/trojan
 ui/
   state.slint        AppState global: ALL Rust↔UI properties & callbacks (structs ConfigData, SubscriptionData, enum ConnectionState)
@@ -129,22 +131,22 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
 ## Status & history (as of 2026-10-26)
-v0.3.0 = Xray core + anti-DPI toggles (TLS fragment, UDP noise). Next-version ideas: docs/addons-plan.md
-(add-on framework, SNI spoofing; DNS tunnels undecided) and a new idea from the user, not written down yet.
+v0.3.0 = Xray core + anti-DPI toggles (TLS fragment, UDP noise). Next-version ideas: docs/addons-plan.md (local only, gitignored)
+(add-on framework, SNI spoofing; DNS tunnels undecided). Then (next version): Psiphon back for users' own servers.
+Maybe later: built-in public VPN servers for general use (user's idea, not planned yet).
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 82 tests passing (+8 ignored) at last count (anti-DPI added 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 85 tests passing (+8 ignored) at last count (own-server Psiphon 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
 - Xray (2026-10-26): link parsing, converter and 10 config shapes pass the real `xray run -test` (v2rayN's 26.9.9);
   chained sing-box config passes `sing-box check`. Real connections (XHTTP etc.) are for the user to verify.
 - Anti-DPI (2026-10-26): configs validated by both engines; whether fragmenting/noise actually helps on real networks is unverified.
-- Psiphon (2026-10-26): DISABLED (`psiphon::ENABLED = false`). Researched: Psiphon publishes no public-network config;
-  integrators request one from the Psiphon team (Outline SDK docs: "Contact the Psiphon team… This may require a
-  contract"). The README "Generate configuration data" flow is only for self-hosted psiphond; the user wants public
-  servers. A self-hosted variant was built and reverted (backup was in a session scratchpad, not kept). Turn it back
-  on once the user has a config; then the binary and connect are still unverified (sandbox refused running it).
+- Psiphon own servers (2026-10-26): re-enabled for self-hosted server entries + private-network JSON configs. Public network
+  dropped (needs a config from the Psiphon team; the user isn't pursuing it). The real binary (pinned build) accepts the
+  generated config: with a 203.0.113.x entry it dials OSSH only to that address. Entries must have `handshake` +
+  `ssh-api-requests` capabilities (real `psiphond generate` output does). A real psiphond connection is for the user to verify.
 - Split tunneling / routing rules (2026-10-25): generator + `sing-box check` pass, UI rendered headlessly. User must verify
   real routing: app rules in Tunnel mode (process lookup as root), geo presets (rule-set download via proxy), whitelist default.
 - pkexec-per-connect (2026-10-18): user must confirm exactly 1 prompt per Tunnel connect, clean disconnect, OpenVPN tun0 creation.

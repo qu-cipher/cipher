@@ -276,12 +276,18 @@ A new fixture must survive deserialize → serialize unchanged. Only use modeled
 
 ## 10. Psiphon chaining (`src/engine/psiphon.rs`)
 
-> **Disabled** (`psiphon::ENABLED = false`) until there's a network config to ship. Psiphon doesn't publish one for its public network; integrators request it from the Psiphon team, possibly under a contract. Everything below still holds once it's switched back on.
+Psiphon configs are the user's own (`import/psiphon.rs`). Psiphon's public network isn't supported: its config is only available from the Psiphon team. `Profile::Psiphon { name, source }` has one of two sources:
+- **`ServerEntry(hex)`**: one self-hosted psiphond server. The hex is what `psiphond generate` writes to `server-entry.dat`: `"<4 legacy fields> <JSON>"`, with `ipAddress`, `region`, ports and `capabilities` in the JSON. It's accepted bare or as `psiphon://<hex>`, also as lines in a subscription.
+- **`Network(map)`**: a client JSON config for a private Psiphon network. It needs `PropagationChannelId` and `SponsorId`. This replaces the old global `Settings.psiphon.network`, which `Store::migrated` turns into a config on load.
 
-The built-in *Psiphon Tunnel* entry (`Profile::Psiphon`, store id `PSIPHON_ID = 0`, never saved) runs two processes:
+A Psiphon config runs two processes:
 
 1. **`psiphon-tunnel-core -config <data>/psiphon.json -dataRootDirectory <data>/psiphon`**, as the user.
-   - The config is the imported network JSON (`Settings.psiphon.network`) with `DataRootDirectory`, `LocalSocksProxyPort` (a free loopback port), `DisableLocalHTTPProxy: true` and `EgressRegion` (`Settings.psiphon.region`) set on top.
+   - **ServerEntry:** `{ PropagationChannelId, SponsorId (Psiphon's example ids; psiphond accepts any), TargetServerEntry: <hex>, DisableRemoteServerListFetcher: true }`. The client then uses only that server.
+     - Checked against the real binary with a 203.0.113.x entry: it dials OSSH to that address only.
+     - An entry without the `handshake`/`ssh-api-requests` capabilities fails at once, with an `Error` notice saying so.
+   - **Network:** the imported JSON as given, including its own `EgressRegion`.
+   - **Both:** `DataRootDirectory`, `LocalSocksProxyPort` (a free loopback port) and `DisableLocalHTTPProxy: true` are set on top, and `ListenInterface` etc. are removed.
    - Notices go to `psiphon.log` as JSON lines. The latest `Tunnels` notice with `count ≥ 1` means connected; the latest `Error` notice explains an exit.
 2. **sing-box, once Psiphon has a tunnel**, generated from `Profile::Proxy` with this outbound:
    ```json

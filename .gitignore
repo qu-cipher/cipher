@@ -11,3 +11,6 @@
 # OS clutter
 .DS_Store
 Thumbs.db
+
+# Private planning notes
+/docs/addons-plan.md

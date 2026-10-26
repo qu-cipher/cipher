@@ -1,6 +1,6 @@
 //! Subscription URLs: a (usually base64) list of share links, plus usage info in the headers.
 
-use crate::import::{ImportError, decode_base64, parse_link, singbox_json::parse_singbox_json};
+use crate::import::{ImportError, decode_base64, parse_link, psiphon, singbox_json::parse_singbox_json};
 use crate::profile::Profile;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -110,9 +110,18 @@ pub fn parse_links(text: &str) -> Subscription {
     if let Some(subscription) = parse_singbox_json(text) {
         return subscription;
     }
+    let mut subscription = Subscription::default();
+    if psiphon::looks_like_network(text) {
+        match psiphon::parse_network_profile(text, "Psiphon network") {
+            Ok(profile) => subscription.profiles.push(profile),
+            Err(e) => subscription.skipped.push(e.to_string()),
+        }
+        return subscription;
+    }
 
+    // Psiphon server entries are bare hex, which would also pass as base64.
     let decoded;
-    let text = match text.contains("://") {
+    let text = match text.contains("://") || text.lines().any(psiphon::looks_like_server_entry) {
         true => text,
         false => match decode_base64(text) {
             Some(d) => {
@@ -123,9 +132,12 @@ pub fn parse_links(text: &str) -> Subscription {
         },
     };
 
-    let mut subscription = Subscription::default();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
-        match parse_link(line) {
+        let parsed = match psiphon::looks_like_server_entry(line) {
+            true => psiphon::parse_server_entry(line),
+            false => parse_link(line),
+        };
+        match parsed {
             Ok(profile) => subscription.profiles.push(profile),
             Err(e) => subscription.skipped.push(format!("{}: {e}", line.split("://").next().unwrap_or(line))),
         }

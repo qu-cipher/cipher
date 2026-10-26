@@ -8,7 +8,7 @@ use crate::engine::{self, Engine, EngineError, Status, install, openvpn, paths, 
 use crate::engine::singbox::config::log::LogLevel;
 use crate::import::{self, ImportError};
 use crate::engine::singbox::generate::PROXY_LISTEN;
-use crate::profile::{ConnectionMode, Credentials, Profile, PsiphonSettings, Settings};
+use crate::profile::{ConnectionMode, Credentials, Profile, Settings};
 use crate::routing::{Preset, Rule, RuleKind, Routing, Target};
 use crate::store::{self, Store};
 use crate::{AppState, AppWindow, ConfigData, ConnectionState, PresetData, RuleData, SubscriptionData};
@@ -37,7 +37,7 @@ const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
 const CORES: [xray::Core; 2] = [xray::Core::SingBox, xray::Core::Xray];
 /// Order of the groups in the grouped Configs list (`Profile::group`).
 const GROUP_ORDER: [&str; 15] = [
-    "Built-In", "VLESS", "VMess", "Trojan", "Shadowsocks", "Hysteria2", "TUIC", "AnyTLS", "WireGuard", "OpenVPN",
+    "VLESS", "VMess", "Trojan", "Shadowsocks", "Hysteria2", "TUIC", "AnyTLS", "WireGuard", "OpenVPN", "Psiphon",
     "SOCKS", "HTTP", "Direct", "Selector", "URLTest",
 ];
 const STARTUP_GRACE: Duration = Duration::from_millis(1500);
@@ -236,7 +236,6 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
     on!(ui, ctx, on_install_psiphon, |ui, ctx| {
         install_engine(&ui, ctx, "Psiphon", |state: &AppState, busy| state.set_psiphon_busy(busy), install::install_psiphon)
     });
-    on!(ui, ctx, on_import_psiphon_network, |ui, ctx| import_psiphon_network(&ui, ctx));
     on!(ui, ctx, on_open_data_dir, |ui, ctx| {
         if let Err(e) = paths::data_dir().and_then(|dir| open_external(&dir).map_err(Into::into)) {
             notify(&ui, ctx, format!("Couldn't open the data folder: {e}"), true);
@@ -347,9 +346,9 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
 
     let mut rows: Vec<(&Profile, ConfigData)> = store
         .all_entries()
-        .filter(|(source, entry)| match *filter {
+        .filter(|(source, _)| match *filter {
             Filter::All => true,
-            Filter::Manual => source.is_none() && !store::is_builtin(entry.id),
+            Filter::Manual => source.is_none(),
             Filter::Subscription(id) => source.is_some_and(|s| s.id == id),
         })
         .map(|(source, entry)| {
@@ -358,10 +357,10 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
                 id: entry.id as i32,
                 name: entry.profile.name().into(),
                 protocol: entry.profile.protocol().into(),
-                source: source_label(source, entry.id).into(),
+                source: source_label(source).into(),
                 latency: latency.into(),
                 latency_level: level,
-                removable: source.is_none() && !store::is_builtin(entry.id),
+                removable: source.is_none(),
                 ..Default::default()
             })
         })
@@ -373,8 +372,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
 
     state.set_filters(ModelRc::new(VecModel::from(filters)));
     state.set_filter_index(filter_index as i32);
-    // Built-in entries don't count: "no configs yet" still means none of the user's own.
-    state.set_config_total(store.all_entries().filter(|(_, e)| !store::is_builtin(e.id)).count() as i32);
+    state.set_config_total(store.all_entries().count() as i32);
     state.set_configs(ModelRc::new(VecModel::from(rows)));
 
     // The selected config card.
@@ -384,7 +382,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
             state.set_selected_id(entry.id as i32);
             state.set_selected_name(entry.profile.name().into());
             state.set_selected_protocol(entry.profile.protocol().into());
-            state.set_selected_source(source_label(source, entry.id).into());
+            state.set_selected_source(source_label(source).into());
         }
         None => state.set_selected_id(-1),
     }
@@ -415,12 +413,8 @@ fn grouped(rows: &mut [(&Profile, ConfigData)], collapsed: &HashSet<&str>) -> Ve
     out
 }
 
-fn source_label(source: Option<&store::StoredSubscription>, id: u64) -> &str {
-    match source {
-        Some(s) => &s.name,
-        None if store::is_builtin(id) => "Built-in",
-        None => "Added manually",
-    }
+fn source_label(source: Option<&store::StoredSubscription>) -> &str {
+    source.map_or("Added manually", |s| s.name.as_str())
 }
 
 fn latency_display(latency: Option<Latency>) -> (String, i32) {
@@ -520,7 +514,7 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
         let Some(files) = rfd::FileDialog::new()
             .set_title("Import WireGuard or OpenVPN configs")
             .add_filter("WireGuard / OpenVPN", &["conf", "ovpn"])
-            .add_filter("Share links / sing-box or Psiphon config", &["txt", "json", "config"])
+            .add_filter("Share links / sing-box or Psiphon config / Psiphon server entry", &["txt", "json", "config", "dat"])
             .pick_files()
         else {
             return;
@@ -528,12 +522,7 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
 
         let mut profiles = Vec::new();
         let mut errors = Vec::new();
-        let mut psiphon_network = None;
         for file in &files {
-            if psiphon::ENABLED && let Ok(text) = std::fs::read_to_string(file) && psiphon::looks_like_network(&text) {
-                psiphon_network = Some(psiphon::parse_network(&text));
-                continue;
-            }
             match import_file(file) {
                 Ok(found) => profiles.extend(found),
                 Err(e) => errors.push(format!("{}: {e}", file.file_name().unwrap_or_default().to_string_lossy())),
@@ -541,12 +530,6 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
         }
 
         on_ui(&weak, &ctx, move |ui, ctx| {
-            if let Some(network) = psiphon_network {
-                set_psiphon_network(ui, ctx, network);
-                if profiles.is_empty() {
-                    return;
-                }
-            }
             if profiles.is_empty() {
                 let reason = errors.first().cloned().unwrap_or_else(|| "No configs found".into());
                 notify(ui, ctx, format!("Nothing imported. {reason}"), true);
@@ -575,7 +558,12 @@ fn import_file(path: &Path) -> Result<Vec<Profile>, ImportError> {
             Ok(vec![import::parse_wireguard_conf(&std::fs::read_to_string(path)?, &name)?])
         }
         _ => {
-            let parsed = import::parse_links(&std::fs::read_to_string(path)?);
+            let text = std::fs::read_to_string(path)?;
+            if import::psiphon::looks_like_network(&text) {
+                let name = path.file_stem().map_or("Psiphon network".into(), |s| s.to_string_lossy().into_owned());
+                return Ok(vec![import::psiphon::parse_network_profile(&text, &name)?]);
+            }
+            let parsed = import::parse_links(&text);
             match parsed.profiles.is_empty() {
                 true => Err(ImportError::Empty),
                 false => Ok(parsed.profiles),
@@ -1047,17 +1035,6 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_group_configs(settings.group_configs);
     state.set_core(CORES.iter().position(|c| *c == settings.core).unwrap_or(0) as i32);
     state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
-    let regions: Vec<SharedString> = psiphon::REGIONS
-        .iter()
-        .map(|(code, name)| match code.is_empty() {
-            true => SharedString::from(*name),
-            false => format!("{name} ({code})").into(),
-        })
-        .collect();
-    state.set_psiphon_regions(ModelRc::new(VecModel::from(regions)));
-    state.set_psiphon_region(psiphon::REGIONS.iter().position(|(code, _)| *code == settings.psiphon.region).unwrap_or(0) as i32);
-    state.set_psiphon_network(psiphon_network_status(&settings.psiphon).into());
-    state.set_psiphon_enabled(psiphon::ENABLED);
     if let Ok(dir) = paths::data_dir() {
         state.set_data_dir(dir.display().to_string().into());
     }
@@ -1090,11 +1067,6 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         routing: Routing {
             default: ROUTE_DEFAULTS.get(state.get_route_default() as usize).copied().unwrap_or_default(),
             ..store.settings.routing.clone()
-        },
-        // The network config is imported through its own callback.
-        psiphon: PsiphonSettings {
-            region: psiphon::REGIONS.get(state.get_psiphon_region() as usize).map_or("", |(code, _)| code).into(),
-            ..store.settings.psiphon.clone()
         },
     };
 
@@ -1206,7 +1178,7 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
     thread::spawn(move || {
         let singbox = install::installed("sing-box");
         let openvpn = install::installed("openvpn");
-        let psiphon = psiphon::ENABLED.then(|| install::installed(psiphon::BINARY)).flatten();
+        let psiphon = install::installed(psiphon::BINARY);
         let xray = install::installed(xray::BINARY);
 
         let usable = singbox.as_ref().is_some_and(|info| version_at_least(&info.version, singbox::MIN_VERSION));
@@ -1228,7 +1200,7 @@ fn refresh_engines(ui: &AppWindow, ctx: &Ctx) {
         let psiphon_installed = psiphon.is_some();
         let psiphon_status = match &psiphon {
             Some(info) => format!("{} · {}", info.version, info.path.display()),
-            None => "Not installed. Needed for Psiphon Tunnel.".into(),
+            None => "Not installed. Needed for Psiphon servers.".into(),
         };
 
         on_ui(&weak, &ctx, move |ui, _| {
@@ -1268,46 +1240,6 @@ fn install_engine(
             refresh_engines(ui, ctx);
         });
     });
-}
-
-// ───────────────────────────── Psiphon ─────────────────────────────
-
-fn psiphon_network_status(settings: &PsiphonSettings) -> String {
-    match &settings.network {
-        Some(network) => {
-            let channel = network.get("PropagationChannelId").and_then(|v| v.as_str()).unwrap_or_default();
-            format!("Imported · channel {}", channel.chars().take(8).collect::<String>())
-        }
-        None => "Not set. Import a Psiphon client config (JSON with PropagationChannelId, SponsorId and server lists).".into(),
-    }
-}
-
-fn import_psiphon_network(ui: &AppWindow, ctx: &Ctx) {
-    let weak = ui.as_weak();
-    let ctx = ctx.clone();
-    thread::spawn(move || {
-        let Some(file) = rfd::FileDialog::new()
-            .set_title("Import Psiphon config")
-            .add_filter("Psiphon config", &["json", "config", "txt"])
-            .pick_file()
-        else {
-            return;
-        };
-        let result = std::fs::read_to_string(&file).map_err(|e| e.to_string()).and_then(|text| psiphon::parse_network(&text));
-        on_ui(&weak, &ctx, move |ui, ctx| set_psiphon_network(ui, ctx, result));
-    });
-}
-
-fn set_psiphon_network(ui: &AppWindow, ctx: &Ctx, network: Result<serde_json::Map<String, serde_json::Value>, String>) {
-    let network = match network {
-        Ok(network) => network,
-        Err(e) => return notify(ui, ctx, format!("Not a Psiphon config: {e}"), true),
-    };
-    let mut store = ctx.store.lock().unwrap();
-    store.settings.psiphon.network = Some(network);
-    save(ui, ctx, &store);
-    ui.global::<AppState>().set_psiphon_network(psiphon_network_status(&store.settings.psiphon).into());
-    notify(ui, ctx, "Imported the Psiphon config", false);
 }
 
 /// `"1.14.3" >= "1.12.0"`, comparing numerically part by part.
@@ -1365,7 +1297,7 @@ mod tests {
         ]
         .iter()
         .map(|link| import::parse_link(link).unwrap())
-        .chain([Profile::Psiphon { name: "Psiphon Tunnel".into() }])
+        .chain([import::psiphon::parse_server_entry(&import::psiphon::tests::sample_entry()).unwrap()])
         .collect();
         let row = |p: &Profile| ConfigData { name: p.name().into(), protocol: p.protocol().into(), ..Default::default() };
         let mut rows: Vec<_> = profiles.iter().map(|p| (p, row(p))).collect();
@@ -1373,15 +1305,15 @@ mod tests {
         let names = |rows: &[ConfigData]| rows.iter().map(|r| (r.header, r.name.to_string(), r.count)).collect::<Vec<_>>();
         let out = grouped(&mut rows, &HashSet::new());
         assert_eq!(names(&out), [
-            (true, "Built-In".into(), 1), (false, "Psiphon Tunnel".into(), 0),
             (true, "VLESS".into(), 1), (false, "V1".into(), 0),
             (true, "Trojan".into(), 2), (false, "T1".into(), 0), (false, "T2".into(), 0),
+            (true, "Psiphon".into(), 1), (false, "Psiphon 203.0.113.7 (DE)".into(), 0),
         ]);
-        assert_eq!(out[4].protocol, "trojan");
+        assert_eq!(out[2].protocol, "trojan");
 
-        let out = grouped(&mut rows, &HashSet::from(["Trojan"]));
+        let out = grouped(&mut rows, &HashSet::from(["Psiphon"]));
         assert_eq!(out.last().map(|r| (r.header, r.collapsed)), Some((true, true)));
-        assert_eq!(out.len(), 5);
+        assert_eq!(out.len(), 6);
     }
 
     #[test]

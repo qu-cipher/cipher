@@ -257,26 +257,26 @@ fn routing_screenshots() {
     d.shot("r07-anti-dpi");
     d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: 450.0 });
 
-    // The Psiphon settings and the built-in entry in the Configs tab (hidden while Psiphon is off).
-    d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: -700.0 });
-    d.shot("r09-psiphon-settings");
-    d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: 1000.0 });
     state.set_current_tab(1);
-    d.shot("r10-configs-psiphon");
-    state.invoke_select_config(0);
-    assert_eq!(state.get_selected_id() == 0, crate::engine::psiphon::ENABLED);
-    d.shot("r11-psiphon-selected");
 
-    // Grouped by protocol, then one group folded, then ungrouped.
+    // Grouped by protocol (with a Psiphon server entry), then one group folded, then ungrouped.
+    let psiphon = crate::import::psiphon::tests::sample_entry();
     state.invoke_add_links(
-        "trojan://pw@a.example.com:443#Trojan A\n\
-         vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443?security=tls#VLESS B\n\
-         trojan://pw@c.example.com:443#Trojan C\n\
-         hy2://pw@d.example.com:443#Hysteria D\n\
-         vless://bf000d23-0752-40b4-affe-68f7707a9661@e.example.com:443?type=xhttp&security=tls&path=%2Fx#XHTTP E".into(),
+        format!(
+            "trojan://pw@a.example.com:443#Trojan A\n\
+             vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443?security=tls#VLESS B\n\
+             trojan://pw@c.example.com:443#Trojan C\n\
+             hy2://pw@d.example.com:443#Hysteria D\n\
+             vless://bf000d23-0752-40b4-affe-68f7707a9661@e.example.com:443?type=xhttp&security=tls&path=%2Fx#XHTTP E\n\
+             psiphon://{psiphon}"
+        )
+        .into(),
     );
     d.shot("r12-configs-grouped");
     assert!(state.get_configs().iter().any(|c| c.name == "XHTTP E"), "XHTTP link wasn't imported");
+    let server = state.get_configs().iter().find(|c| c.name == "Psiphon 203.0.113.7 (DE)").expect("Psiphon entry wasn't imported");
+    state.invoke_select_config(server.id);
+    d.shot("r10-psiphon-selected");
     state.invoke_toggle_group("Trojan".into());
     d.shot("r13-group-collapsed");
     state.set_group_configs(false);

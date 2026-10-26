@@ -116,7 +116,7 @@ export component SettingsPanel inherits ScrollView {
                 hint: AppState.openvpn-status;
             }
 
-            if AppState.psiphon-enabled: Row {
+            Row {
                 label: "Psiphon";
                 hint: AppState.psiphon-status;
 
@@ -241,37 +241,6 @@ export component SettingsPanel inherits ScrollView {
                 Toggle {
                     checked <=> AppState.tunnel-proxy;
                     toggled => { AppState.settings-changed(); }
-                }
-            }
-        }
-
-        if AppState.psiphon-enabled: Section {
-            title: "PSIPHON";
-
-            Row {
-                label: "Network config";
-                hint: AppState.psiphon-network;
-                VerticalLayout {
-                    alignment: center;
-                    PillButton {
-                        text: "Import";
-                        icon: @image-url("../../assets/icons/MdiFileImport.svg");
-                        clicked => { AppState.import-psiphon-network(); }
-                    }
-                }
-            }
-
-            Row {
-                label: "Exit country";
-                hint: "Where Psiphon Tunnel's traffic leaves the Psiphon network.";
-                VerticalLayout {
-                    alignment: center;
-                    ComboBox {
-                        width: 170px;
-                        model: AppState.psiphon-regions;
-                        current-index <=> AppState.psiphon-region;
-                        selected => { AppState.settings-changed(); }
-                    }
                 }
             }
         }

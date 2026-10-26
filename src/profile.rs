@@ -29,8 +29,12 @@ pub enum Profile {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         credentials: Option<Credentials>,
     },
-    /// The built-in Psiphon entry: Psiphon's client finds its own servers, sing-box sits in front.
-    Psiphon { name: String },
+    /// The user's own Psiphon server or network, run by Psiphon's client with sing-box in front.
+    Psiphon {
+        name: String,
+        #[serde(flatten)]
+        source: PsiphonSource,
+    },
     /// A config only Xray can run (XHTTP, mKCP, VLESS encryption), with sing-box in front.
     Xray { name: String, outbound: XrayOutbound },
 }
@@ -55,6 +59,17 @@ impl OpenVpnConfig {
     }
 }
 
+/// What a Psiphon profile connects to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PsiphonSource {
+    /// One self-hosted server: the hex server entry from `psiphond generate` (`server-entry.dat`).
+    #[serde(rename = "server_entry")]
+    ServerEntry(String),
+    /// A private Psiphon network: its client config (`PropagationChannelId`, `SponsorId`, server lists).
+    #[serde(rename = "network")]
+    Network(serde_json::Map<String, serde_json::Value>),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Credentials {
     pub username: String,
@@ -67,7 +82,7 @@ impl Profile {
             Profile::Proxy { name, .. }
             | Profile::WireGuard { name, .. }
             | Profile::OpenVpn { name, .. }
-            | Profile::Psiphon { name }
+            | Profile::Psiphon { name, .. }
             | Profile::Xray { name, .. } => name,
         }
     }
@@ -102,7 +117,7 @@ impl Profile {
         }
     }
 
-    /// Group in the Configs list: the protocol's full name, or "Built-In" for the app's own tunnels.
+    /// Group in the Configs list: the protocol's full name.
     pub fn group(&self) -> &'static str {
         match self {
             Profile::Proxy { outbound, .. } => match outbound {
@@ -121,7 +136,7 @@ impl Profile {
             },
             Profile::WireGuard { .. } => "WireGuard",
             Profile::OpenVpn { .. } => "OpenVPN",
-            Profile::Psiphon { .. } => "Built-In",
+            Profile::Psiphon { .. } => "Psiphon",
             Profile::Xray { outbound, .. } => match outbound.protocol {
                 XrayProtocol::Vless(_) => "VLESS",
                 XrayProtocol::Vmess(_) => "VMess",
@@ -135,6 +150,10 @@ impl Profile {
     /// Server address for a TCP latency test. `None` for UDP-only protocols,
     /// where a TCP connect says nothing about reachability.
     pub fn tcp_endpoint(&self) -> Option<(String, u16)> {
+        if let Profile::Psiphon { source: PsiphonSource::ServerEntry(entry), .. } = self {
+            let info = crate::import::psiphon::info(entry)?;
+            return Some((info.ip, info.tcp_port?));
+        }
         if let Profile::Xray { outbound, .. } = self {
             let (server, port) = outbound.server().filter(|_| outbound.network() != XrayNetwork::Kcp)?;
             return Some((server.into(), port));
@@ -200,7 +219,6 @@ pub struct Settings {
     pub tunnel_proxy: bool,
     /// Split tunneling: routing rules, presets and the default route (sing-box only).
     pub routing: Routing,
-    pub psiphon: PsiphonSettings,
     /// Which engine runs VLESS/VMess/Trojan/Shadowsocks configs both engines can run.
     pub core: Core,
     /// Group the Configs list by protocol.
@@ -209,16 +227,6 @@ pub struct Settings {
     pub tls_fragment: bool,
     /// Anti-DPI: send random UDP packets before the real ones (mKCP configs, Xray only).
     pub udp_noise: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
-pub struct PsiphonSettings {
-    /// Psiphon network parameters (`PropagationChannelId`, `SponsorId`, server list URLs and keys),
-    /// imported from a Psiphon JSON config. Everything else in the client config is generated.
-    pub network: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Exit country as an ISO 3166-1 alpha-2 code; empty = the fastest server anywhere.
-    pub region: String,
 }
 
 impl Settings {
@@ -239,7 +247,6 @@ impl Default for Settings {
             proxy_port: 2080,
             tunnel_proxy: false,
             routing: Routing::default(),
-            psiphon: PsiphonSettings::default(),
             core: Core::SingBox,
             group_configs: true,
             tls_fragment: false,

@@ -1,61 +1,37 @@
-//! Psiphon: the ConsoleClient (`psiphon-tunnel-core`) finds and connects to Psiphon servers on
-//! its own and serves a local SOCKS proxy, with sing-box in front (see `engine::chain`).
+//! Psiphon: the ConsoleClient (`psiphon-tunnel-core`) connects to the user's own Psiphon server
+//! (a server entry from `psiphond generate`) or private network (a client config) and serves a
+//! local SOCKS proxy, with sing-box in front (see `engine::chain`).
 
 use crate::engine::{chain::{self, Chain}, paths, process::Process, Engine, EngineError, Status};
 use crate::engine::singbox::config::shared::Network;
-use crate::profile::{Profile, Settings};
+use crate::profile::{Profile, PsiphonSource, Settings};
 use serde_json::{Map, Value};
 use std::{ffi::OsStr, fs, path::Path};
 
 pub const BINARY: &str = "psiphon-tunnel-core";
 
-/// Psiphon is hidden until there's a network config to ship: Psiphon doesn't publish one for its
-/// public servers, integrators request it from the Psiphon team (possibly under a contract).
-/// While false there's no Psiphon Tunnel entry, engine row or Psiphon settings.
-pub const ENABLED: bool = false;
+/// A self-hosted psiphond accepts any ids; these are the ones from Psiphon's own example config.
+const PROPAGATION_CHANNEL_ID: &str = "24BCA4EE20BEB92C";
+const SPONSOR_ID: &str = "721AE60D76700F5A";
 
-/// Exit countries Psiphon offers: (ISO code, name). Empty code = fastest server anywhere.
-pub const REGIONS: [(&str, &str); 29] = [
-    ("", "Fastest"),
-    ("AT", "Austria"), ("BE", "Belgium"), ("BG", "Bulgaria"), ("CA", "Canada"), ("CH", "Switzerland"),
-    ("CZ", "Czechia"), ("DE", "Germany"), ("DK", "Denmark"), ("EE", "Estonia"), ("ES", "Spain"),
-    ("FI", "Finland"), ("FR", "France"), ("GB", "United Kingdom"), ("HU", "Hungary"), ("IE", "Ireland"),
-    ("IN", "India"), ("IT", "Italy"), ("JP", "Japan"), ("LV", "Latvia"), ("NL", "Netherlands"),
-    ("NO", "Norway"), ("PL", "Poland"), ("RO", "Romania"), ("RS", "Serbia"), ("SE", "Sweden"),
-    ("SG", "Singapore"), ("SK", "Slovakia"), ("US", "United States"),
-];
-
-/// Fields a network config must have to reach the Psiphon network.
-const REQUIRED: [&str; 2] = ["PropagationChannelId", "SponsorId"];
-
-/// Whether a file's text looks like a Psiphon client config.
-pub fn looks_like_network(text: &str) -> bool {
-    text.contains("\"PropagationChannelId\"")
-}
-
-/// Reads the network part of a Psiphon JSON client config.
-pub fn parse_network(text: &str) -> Result<Map<String, Value>, String> {
-    let Ok(Value::Object(network)) = serde_json::from_str(text) else {
-        return Err("not a JSON object".into());
+/// The full client config. A server entry is used exclusively (`TargetServerEntry`), without
+/// server list downloads; a network config is kept as imported. The local parts are set by us.
+fn client_config(source: &PsiphonSource, data_root: &Path, socks_port: u16) -> Map<String, Value> {
+    let mut config = match source {
+        PsiphonSource::ServerEntry(entry) => Map::from_iter([
+            ("PropagationChannelId".into(), PROPAGATION_CHANNEL_ID.into()),
+            ("SponsorId".into(), SPONSOR_ID.into()),
+            ("TargetServerEntry".into(), entry.as_str().into()),
+            ("DisableRemoteServerListFetcher".into(), true.into()),
+        ]),
+        PsiphonSource::Network(network) => network.clone(),
     };
-    for field in REQUIRED {
-        if !network.get(field).and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty()) {
-            return Err(format!("{field} is missing"));
-        }
-    }
-    Ok(network)
-}
-
-/// The full client config: the imported network fields, with the local parts set by us.
-fn client_config(network: &Map<String, Value>, region: &str, data_root: &Path, socks_port: u16) -> Map<String, Value> {
-    let mut config = network.clone();
     let mut set = |key: &str, value: Value| {
         config.insert(key.into(), value);
     };
     set("DataRootDirectory", data_root.to_string_lossy().into());
     set("LocalSocksProxyPort", socks_port.into());
     set("DisableLocalHTTPProxy", true.into());
-    set("EgressRegion", region.into());
     // Only sing-box talks to it, on loopback.
     config.remove("ListenInterface");
     config.remove("DisableLocalSocksProxy");
@@ -93,13 +69,12 @@ pub struct PsiphonEngine {
 
 impl Engine for PsiphonEngine {
     fn start(&mut self, profile: &Profile, settings: &Settings) -> Result<(), EngineError> {
-        let Profile::Psiphon { name } = profile else {
+        let Profile::Psiphon { name, source } = profile else {
             return Err(EngineError::WrongEngine(profile.engine_kind()));
         };
         if self.status() == Status::Running {
             return Err(EngineError::AlreadyRunning);
         }
-        let network = settings.psiphon.network.as_ref().ok_or(EngineError::PsiphonNetworkMissing)?;
         let binary = paths::find_binary(BINARY)?;
 
         let data_dir = paths::data_dir()?;
@@ -107,7 +82,7 @@ impl Engine for PsiphonEngine {
         fs::create_dir_all(&data_root)?;
         let socks_port = chain::free_port()?;
         let config_path = data_dir.join("psiphon.json");
-        let config = client_config(network, &settings.psiphon.region, &data_root, socks_port);
+        let config = client_config(source, &data_root, socks_port);
         paths::write_private(&config_path, &serde_json::to_string_pretty(&config)?)?;
 
         let log_path = data_dir.join("psiphon.log");
@@ -148,36 +123,32 @@ mod tests {
     use super::*;
     use crate::engine::singbox::{config::outbound::{Outbound, socks::SocksOutbound}, generate::build_config};
 
-    const NETWORK: &str = r#"{
-        "PropagationChannelId": "FFFFFFFFFFFFFFFF",
-        "SponsorId": "0000000000000000",
-        "RemoteServerListURLs": [{ "URL": "https://example.com/list", "OnlyAfterAttempts": 0 }],
-        "LocalHttpProxyPort": 8080,
-        "ListenInterface": "any",
-        "EgressRegion": "US"
-    }"#;
-
     #[test]
-    fn network_config_is_validated() {
-        assert!(looks_like_network(NETWORK));
-        assert!(parse_network(NETWORK).is_ok());
-        assert_eq!(parse_network(r#"{ "SponsorId": "x" }"#).unwrap_err(), "PropagationChannelId is missing");
-        assert_eq!(parse_network(r#"{ "PropagationChannelId": "x", "SponsorId": " " }"#).unwrap_err(), "SponsorId is missing");
-        assert!(parse_network("[1]").is_err());
-    }
+    fn server_entry_config_targets_the_server() {
+        let source = PsiphonSource::ServerEntry("abcd".into());
+        let config = client_config(&source, Path::new("/data/psiphon"), 40123);
 
-    #[test]
-    fn client_config_keeps_network_and_sets_local_parts() {
-        let network = parse_network(NETWORK).unwrap();
-        let config = client_config(&network, "DE", Path::new("/data/psiphon"), 40123);
-
-        assert_eq!(config["PropagationChannelId"], "FFFFFFFFFFFFFFFF");
-        assert_eq!(config["RemoteServerListURLs"][0]["URL"], "https://example.com/list");
+        assert_eq!(config["TargetServerEntry"], "abcd");
+        assert_eq!(config["DisableRemoteServerListFetcher"], true);
+        assert_eq!(config["PropagationChannelId"], PROPAGATION_CHANNEL_ID);
         assert_eq!(config["LocalSocksProxyPort"], 40123);
         assert_eq!(config["DisableLocalHTTPProxy"], true);
         assert_eq!(config["DataRootDirectory"], "/data/psiphon");
-        assert_eq!(config["EgressRegion"], "DE");
+    }
+
+    #[test]
+    fn network_config_keeps_its_fields_and_sets_local_parts() {
+        let network = crate::import::psiphon::parse_network(crate::import::psiphon::tests::NETWORK).unwrap();
+        let config = client_config(&PsiphonSource::Network(network), Path::new("/data/psiphon"), 40123);
+
+        assert_eq!(config["PropagationChannelId"], "FFFFFFFFFFFFFFFF");
+        assert_eq!(config["RemoteServerListURLs"][0]["URL"], "https://example.com/list");
+        assert_eq!(config["EgressRegion"], "US");
+        assert_eq!(config["LocalSocksProxyPort"], 40123);
+        assert_eq!(config["DisableLocalHTTPProxy"], true);
+        assert_eq!(config["DataRootDirectory"], "/data/psiphon");
         assert!(config.get("ListenInterface").is_none());
+        assert!(config.get("TargetServerEntry").is_none());
     }
 
     #[test]
@@ -193,16 +164,9 @@ not json
     }
 
     #[test]
-    fn needs_a_network_config() {
-        let profile = Profile::Psiphon { name: "Psiphon Tunnel".into() };
-        let result = PsiphonEngine::default().start(&profile, &Settings::default());
-        assert!(matches!(result, Err(EngineError::PsiphonNetworkMissing)));
-    }
-
-    #[test]
     fn singbox_side_chains_to_psiphon_and_lets_it_out_directly() {
         let profile = Profile::Proxy {
-            name: "Psiphon Tunnel".into(),
+            name: "Psiphon 203.0.113.7".into(),
             outbound: Outbound::Socks(SocksOutbound {
                 server: "127.0.0.1".into(),
                 server_port: 40123,

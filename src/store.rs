@@ -2,28 +2,15 @@
 
 use crate::engine::paths;
 use crate::import::{Subscription, Usage};
-use crate::profile::{Profile, Settings};
+use crate::profile::{Profile, PsiphonSource, Settings};
 use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
     path::PathBuf,
-    sync::LazyLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 const FILE_NAME: &str = "state.json";
-
-/// Id of the built-in Psiphon entry. Stored ids start at 1.
-pub const PSIPHON_ID: u64 = 0;
-
-/// Entries the app always has. They aren't saved and can't be removed.
-static BUILTIN: LazyLock<[Entry; 1]> = LazyLock::new(|| {
-    [Entry { id: PSIPHON_ID, profile: Profile::Psiphon { name: "Psiphon Tunnel".into() } }]
-});
-
-pub fn is_builtin(id: u64) -> bool {
-    BUILTIN.iter().any(|e| e.id == id)
-}
 
 /// A profile with an id that stays stable across runs (used for selection).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +53,7 @@ impl Store {
         };
 
         let mut store = match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
+            Ok(text) => serde_json::from_str(&text).map(|store: Store| store.migrated(&text)).unwrap_or_else(|e| {
                 eprintln!("state.json is unreadable ({e}), starting fresh");
                 let _ = fs::rename(&path, path.with_extension("json.bak"));
                 Self::default()
@@ -84,6 +71,27 @@ impl Store {
         let tmp = path.with_extension("json.tmp");
         paths::write_private(&tmp, &serde_json::to_string_pretty(self)?)?;
         fs::rename(tmp, path)
+    }
+
+    /// Up to 0.3: one Psiphon network config in `settings.psiphon.network`, used by a built-in
+    /// entry (id 0). It becomes a normal config; the old field isn't saved again.
+    fn migrated(mut self, text: &str) -> Self {
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct Old { settings: OldSettings }
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct OldSettings { psiphon: OldPsiphon }
+        #[derive(Deserialize, Default)]
+        #[serde(default)]
+        struct OldPsiphon { network: Option<serde_json::Map<String, serde_json::Value>> }
+
+        if let Ok(Old { settings: OldSettings { psiphon: OldPsiphon { network: Some(network) } } }) = serde_json::from_str(text) {
+            let name = "Psiphon (imported config)".into();
+            self.add_profiles(vec![Profile::Psiphon { name, source: PsiphonSource::Network(network) }]);
+        }
+        self.forget_missing_selection();
+        self
     }
 
     fn next_id(&mut self) -> u64 {
@@ -167,10 +175,9 @@ impl Store {
         self.all_entries().find(|(_, e)| e.id == id).map(|(_, e)| e)
     }
 
-    /// Every config with the subscription it belongs to (`None` = built-in or manual).
+    /// Every config with the subscription it belongs to (`None` = manual).
     pub fn all_entries(&self) -> impl Iterator<Item = (Option<&StoredSubscription>, &Entry)> {
-        let builtin = BUILTIN.iter().filter(|_| crate::engine::psiphon::ENABLED);
-        let manual = builtin.chain(&self.manual).map(|e| (None, e));
+        let manual = self.manual.iter().map(|e| (None, e));
         let subscribed = self
             .subscriptions
             .iter()
@@ -243,22 +250,19 @@ mod tests {
     }
 
     #[test]
-    fn psiphon_is_built_in() {
-        let mut store = Store::default();
-        if !crate::engine::psiphon::ENABLED {
-            assert!(store.entry(PSIPHON_ID).is_none());
-            return;
-        }
-        let (source, entry) = store.all_entries().next().unwrap();
-        assert!(source.is_none() && entry.id == PSIPHON_ID && is_builtin(entry.id));
-        assert_eq!(entry.profile.protocol(), "psiphon");
+    fn old_psiphon_network_becomes_a_config() {
+        let old = r#"{ "settings": { "psiphon": { "network": { "PropagationChannelId": "A", "SponsorId": "B" }, "region": "DE" } },
+                       "selected": 0, "next_id": 4 }"#;
+        let store = serde_json::from_str::<Store>(old).unwrap().migrated(old);
+        let entry = &store.manual[0];
+        assert_eq!(entry.id, 5);
+        assert_eq!(store.selected, None);
+        let Profile::Psiphon { source: PsiphonSource::Network(network), .. } = &entry.profile else { panic!() };
+        assert_eq!(network["SponsorId"], "B");
+        assert!(!serde_json::to_string(&store).unwrap().contains("region"));
 
-        store.selected = Some(PSIPHON_ID);
-        store.remove_entry(PSIPHON_ID);
-        assert!(store.entry(PSIPHON_ID).is_some());
-        assert_eq!(store.selected, Some(PSIPHON_ID));
-        assert!(store.entry_mut(PSIPHON_ID).is_none());
-        assert!(!serde_json::to_string(&store).unwrap().contains("Psiphon"));
+        let current = serde_json::to_string(&store).unwrap();
+        assert_eq!(serde_json::from_str::<Store>(&current).unwrap().migrated(&current).manual.len(), 1);
     }
 
     #[test]

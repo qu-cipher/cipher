@@ -472,7 +472,7 @@ mod tests {
         let modes = [ConnectionMode::Tunnel, ConnectionMode::SystemProxy, ConnectionMode::ProxyOnly];
         // Psiphon's sing-box side: a SOCKS outbound to it, its own process routed direct.
         let psiphon = Profile::Proxy {
-            name: "Psiphon Tunnel".into(),
+            name: "Psiphon 203.0.113.7".into(),
             outbound: Outbound::Socks(crate::engine::singbox::config::outbound::socks::SocksOutbound {
                 server: "127.0.0.1".into(),
                 server_port: 40123,
