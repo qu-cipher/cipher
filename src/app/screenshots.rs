@@ -250,6 +250,13 @@ fn routing_screenshots() {
     assert_eq!(state.get_rules().row_count(), 3);
     assert_eq!(state.get_rules().row_data(0).unwrap().kind, "IP");
 
+    // The anti-DPI toggles, below the routing rules.
+    state.set_tls_fragment(true);
+    state.invoke_settings_changed();
+    d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: -450.0 });
+    d.shot("r07-anti-dpi");
+    d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: 450.0 });
+
     // The Psiphon settings and the built-in entry in the Configs tab (hidden while Psiphon is off).
     d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: -700.0 });
     d.shot("r09-psiphon-settings");

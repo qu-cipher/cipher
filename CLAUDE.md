@@ -45,7 +45,8 @@ src/
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
                      ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing,
                      psiphon: PsiphonSettings {network: imported JSON map, region},
-                     core: xray::Core {SingBox(default), Xray}, group_configs=true);
+                     core: xray::Core {SingBox(default), Xray}, group_configs=true,
+                     tls_fragment, udp_noise: anti-DPI toggles, default off);
                      Profile::group() = group label in the Configs list ("VLESS", …, "Built-In" for Psiphon)
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
                      Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
@@ -63,7 +64,7 @@ src/
   engine/chain.rs    Chain: upstream process with a local SOCKS port + inner SingBoxEngine (socks outbound, process_name→direct),
                      started once `upstream_up`; shared by Xray and Psiphon
   engine/xray.rs     XrayEngine (xray.json → `xray run -test` → `xray run`; up = SOCKS port open), Core, effective() (core setting)
-  engine/xray/config.rs   serde model of an Xray outbound (vless/vmess/trojan/shadowsocks + streamSettings)
+  engine/xray/config.rs   serde model of an Xray outbound (vless/vmess/trojan/shadowsocks + streamSettings, finalmask)
   engine/xray/convert.rs  sing-box Outbound → XrayOutbound for the Xray core (None = stays on sing-box)
   engine/psiphon.rs  PsiphonEngine: psiphon-tunnel-core (as user, JSON notices → psiphon.log) then, once a `Tunnels` notice
                      count ≥ 1, an inner SingBoxEngine with a socks outbound to it + process_name→direct rule; REGIONS
@@ -104,6 +105,10 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   Subscriptions update in place; selection follows the same server name.
 - **Configs grouping**: `refresh_configs` → `grouped()` sorts rows by `GROUP_ORDER` and inserts heading rows
   (`ConfigData.header`, id -1, `count`, `collapsed`); folded groups live in `Shared.collapsed` (session only).
+- **Anti-DPI** (Settings → ANTI-DPI): `tls_fragment` → sing-box `tls.fragment` on TLS-enabled TCP outbounds
+  (`Outbound::tcp_tls_mut`), Xray `finalmask.tcp` fragment (`tlshello`) on non-kcp; `udp_noise` → Xray `finalmask.udp`
+  noise on kcp only. Both shapes pass `xray run -test` 26.10.21 / `sing-box check` (also with Reality). Old
+  `kcpSettings.header` still accepted by 26.10.21 (no `mkcp-legacy` migration needed yet).
 - **Latency test**: TCP connect (3s, 16 workers) to `Profile::tcp_endpoint()`; UDP protocols skipped.
 - **UI contract**: Rust owns data; UI only calls `AppState` callbacks. Adding a UI feature = property/callback in
   `state.slint` + handler in `app.rs` `bind_callbacks`.
@@ -124,14 +129,17 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
 ## Status & history (as of 2026-10-26)
+v0.3.0 = Xray core + anti-DPI toggles (TLS fragment, UDP noise). Next-version ideas: docs/addons-plan.md
+(add-on framework, SNI spoofing; DNS tunnels undecided) and a new idea from the user, not written down yet.
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 80 tests passing at last count (Xray core added 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 82 tests passing (+8 ignored) at last count (anti-DPI added 2026-10-26); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
 Pending / unverified:
 - Xray (2026-10-26): link parsing, converter and 10 config shapes pass the real `xray run -test` (v2rayN's 26.9.9);
   chained sing-box config passes `sing-box check`. Real connections (XHTTP etc.) are for the user to verify.
+- Anti-DPI (2026-10-26): configs validated by both engines; whether fragmenting/noise actually helps on real networks is unverified.
 - Psiphon (2026-10-26): DISABLED (`psiphon::ENABLED = false`). Researched: Psiphon publishes no public-network config;
   integrators request one from the Psiphon team (Outline SDK docs: "Contact the Psiphon team… This may require a
   contract"). The README "Generate configuration data" flow is only for self-hosted psiphond; the user wants public

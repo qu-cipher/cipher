@@ -14,7 +14,7 @@ use std::{borrow::Cow, net::{SocketAddr, TcpStream}, path::Path, process::Comman
 pub mod config;
 pub mod convert;
 
-use config::{DomainStrategy, Sockopt, XrayOutbound};
+use config::{DomainStrategy, Finalmask, FragmentMask, Mask, Network, NoiseMask, NoisePacket, Sockopt, XrayOutbound};
 
 pub const BINARY: &str = "xray";
 const SOCKS_TAG: &str = "socks-in";
@@ -48,8 +48,10 @@ pub fn effective<'a>(profile: &'a Profile, settings: &Settings) -> Cow<'a, Profi
 fn build_config(outbound: &XrayOutbound, settings: &Settings, socks_port: u16) -> Value {
     let mut outbound = outbound.clone();
     outbound.tag = PROXY_TAG.into();
-    outbound.stream.get_or_insert_default().sockopt =
-        Some(Sockopt { domain_strategy: Some(DomainStrategy::UseIP) });
+    let kcp = outbound.network() == Network::Kcp;
+    let stream = outbound.stream.get_or_insert_default();
+    stream.sockopt = Some(Sockopt { domain_strategy: Some(DomainStrategy::UseIP) });
+    stream.finalmask = finalmask(settings, kcp);
 
     json!({
         "log": { "loglevel": log_level(settings.log_level) },
@@ -64,6 +66,25 @@ fn build_config(outbound: &XrayOutbound, settings: &Settings, socks_port: u16) -
         "outbounds": [outbound, { "tag": DIRECT_TAG, "protocol": "freedom" }],
         "routing": { "rules": [{ "inboundTag": [DNS_TAG], "outboundTag": DIRECT_TAG }] },
     })
+}
+
+/// Anti-DPI masks from Settings: TLS-hello fragments for TCP transports, noise for mKCP.
+fn finalmask(settings: &Settings, kcp: bool) -> Option<Finalmask> {
+    let mut mask = Finalmask::default();
+    if settings.tls_fragment && !kcp {
+        mask.tcp.push(Mask::Fragment(FragmentMask {
+            packets: "tlshello".into(),
+            lengths: vec!["100-200".into()],
+            delays: vec!["10-20".into()],
+        }));
+    }
+    if settings.udp_noise && kcp {
+        mask.udp.push(Mask::Noise(NoiseMask {
+            reset: "30-60".into(),
+            noise: vec![NoisePacket { rand: "10-20".into(), delay: "10-16".into() }],
+        }));
+    }
+    (mask != Finalmask::default()).then_some(mask)
 }
 
 fn log_level(level: LogLevel) -> &'static str {
@@ -178,6 +199,24 @@ mod tests {
     }
 
     #[test]
+    fn anti_dpi_masks_follow_the_transport() {
+        let all = Settings { tls_fragment: true, udp_noise: true, ..Default::default() };
+        let stream = |config: Value| config["outbounds"][0]["streamSettings"].clone();
+
+        assert!(stream(build_config(&xhttp_reality(), &Settings::default(), 1)).get("finalmask").is_none());
+
+        let xhttp = stream(build_config(&xhttp_reality(), &all, 1));
+        assert_eq!(xhttp["finalmask"]["tcp"][0]["type"], "fragment");
+        assert_eq!(xhttp["finalmask"]["tcp"][0]["settings"]["packets"], "tlshello");
+        assert!(xhttp["finalmask"].get("udp").is_none());
+
+        let kcp = crate::import::xray::tests::samples().into_iter().find(|(_, o)| o.network() == Network::Kcp).unwrap().1;
+        let kcp = stream(build_config(&kcp, &all, 1));
+        assert_eq!(kcp["finalmask"]["udp"][0]["type"], "noise");
+        assert!(kcp["finalmask"].get("tcp").is_none());
+    }
+
+    #[test]
     fn core_setting_picks_the_engine() {
         let vless = Profile::Proxy {
             name: "V".into(),
@@ -212,10 +251,13 @@ mod tests {
 
         for (name, outbound) in crate::import::xray::tests::samples() {
             let path = dir.join(format!("{name}.json"));
-            let config = build_config(&outbound, &Settings::default(), 40123);
-            std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
-            if let Err(e) = check(&binary, &path) {
-                panic!("{name} rejected: {e}");
+            let anti_dpi = Settings { tls_fragment: true, udp_noise: true, ..Default::default() };
+            for (variant, settings) in [("plain", Settings::default()), ("anti-dpi", anti_dpi)] {
+                let config = build_config(&outbound, &settings, 40123);
+                std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
+                if let Err(e) = check(&binary, &path) {
+                    panic!("{name} ({variant}) rejected: {e}");
+                }
             }
         }
     }

@@ -205,6 +205,10 @@ pub struct Settings {
     pub core: Core,
     /// Group the Configs list by protocol.
     pub group_configs: bool,
+    /// Anti-DPI: split the TLS ClientHello into small TCP segments (TCP configs, both engines).
+    pub tls_fragment: bool,
+    /// Anti-DPI: send random UDP packets before the real ones (mKCP configs, Xray only).
+    pub udp_noise: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -238,6 +242,8 @@ impl Default for Settings {
             psiphon: PsiphonSettings::default(),
             core: Core::SingBox,
             group_configs: true,
+            tls_fragment: false,
+            udp_noise: false,
         }
     }
 }

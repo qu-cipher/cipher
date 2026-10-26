@@ -199,6 +199,28 @@ export component SettingsPanel inherits ScrollView {
         }
 
         Section {
+            title: "ANTI-DPI";
+
+            Row {
+                label: "Fragment TLS hello";
+                hint: "Splits the TLS handshake into small, delayed pieces so filters can't read the server name. VLESS, VMess, Trojan and AnyTLS over TCP.";
+                Toggle {
+                    checked <=> AppState.tls-fragment;
+                    toggled => { AppState.settings-changed(); }
+                }
+            }
+
+            Row {
+                label: "UDP noise";
+                hint: "Sends a few random packets before connecting. mKCP configs (Xray).";
+                Toggle {
+                    checked <=> AppState.udp-noise;
+                    toggled => { AppState.settings-changed(); }
+                }
+            }
+        }
+
+        Section {
             title: "PROXY";
 
             Row {

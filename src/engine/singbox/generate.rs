@@ -45,6 +45,12 @@ pub fn build_config(
         Profile::Proxy { outbound, .. } => {
             let mut outbound = outbound.clone();
             *outbound.tag_mut() = PROXY_TAG.into();
+            if settings.tls_fragment
+                && let Some(tls) = outbound.tcp_tls_mut()
+                && tls.enabled == Some(true)
+            {
+                tls.fragment = Some(true);
+            }
             outbounds.push(outbound);
         }
         Profile::WireGuard { endpoint, .. } => {
@@ -436,6 +442,19 @@ mod tests {
     }
 
     #[test]
+    fn tls_fragment_only_touches_tls_outbounds() {
+        assert!(build(&vless_profile(), &Settings::default())["outbounds"][0]["tls"].get("fragment").is_none());
+
+        let settings = Settings { tls_fragment: true, ..Default::default() };
+        assert_eq!(build(&vless_profile(), &settings)["outbounds"][0]["tls"]["fragment"], true);
+
+        let Profile::Proxy { name, outbound: Outbound::Vless(mut plain) } = vless_profile() else { unreachable!() };
+        plain.tls = None;
+        let config = build(&Profile::Proxy { name, outbound: Outbound::Vless(plain) }, &settings);
+        assert!(config["outbounds"][0].get("tls").is_none());
+    }
+
+    #[test]
     fn settings_without_routing_still_load() {
         let settings: Settings = serde_json::from_str(r#"{ "mode": "proxy_only", "bypass_lan": false }"#).unwrap();
         assert_eq!(settings.routing, Routing::default());
@@ -466,7 +485,8 @@ mod tests {
         for (name, profile, direct) in [("vless", vless_profile(), &[][..]), ("wireguard", wireguard_profile(), &[]), ("psiphon", psiphon, &bypass)] {
             for mode in modes {
                 for (variant, routing) in [("plain", Routing::default()), ("routed", full_routing())] {
-                    let settings = Settings { mode, tunnel_proxy: true, routing, ..Default::default() };
+                    let tls_fragment = variant == "routed";
+                    let settings = Settings { mode, tunnel_proxy: true, routing, tls_fragment, ..Default::default() };
                     let config = build_config(&profile, &settings, &dir, direct).unwrap();
                     let path = dir.join(format!("{name}-{mode:?}-{variant}.json"));
                     std::fs::write(&path, serde_json::to_string_pretty(&config).unwrap()).unwrap();

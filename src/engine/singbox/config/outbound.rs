@@ -12,6 +12,7 @@ use self::{
     selector::SelectorOutbound,
     urltest::UrltestOutbound,
 };
+use super::shared::TlsOutbound;
 use serde::{Serialize, Deserialize};
 
 pub mod direct;
@@ -62,6 +63,18 @@ impl Outbound {
             Outbound::AnyTls(o) => &mut o.tag,
             Outbound::Selector(o) => &mut o.tag,
             Outbound::Urltest(o) => &mut o.tag,
+        }
+    }
+
+    /// TLS options of the TCP-based outbounds (QUIC ones can't fragment the handshake).
+    pub fn tcp_tls_mut(&mut self) -> Option<&mut TlsOutbound> {
+        match self {
+            Outbound::Http(o) => o.tls.as_mut(),
+            Outbound::Vmess(o) => o.tls.as_mut(),
+            Outbound::Vless(o) => o.tls.as_mut(),
+            Outbound::Trojan(o) => o.tls.as_mut(),
+            Outbound::AnyTls(o) => Some(&mut o.tls),
+            _ => None,
         }
     }
 }

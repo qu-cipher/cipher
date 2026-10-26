@@ -127,6 +127,53 @@ pub struct StreamSettings {
     pub kcp_settings: Option<KcpSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sockopt: Option<Sockopt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finalmask: Option<Finalmask>,
+}
+
+/// Masks applied to the raw TCP stream / UDP packets, innermost first (Xray 26 FinalMask).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Finalmask {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tcp: Vec<Mask>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub udp: Vec<Mask>,
+}
+
+/// `"type": "fragment", "settings": {…}`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "settings", rename_all = "lowercase")]
+pub enum Mask {
+    Fragment(FragmentMask),
+    Noise(NoiseMask),
+}
+
+/// Splits the first writes (or just the TLS ClientHello) into small, delayed TCP segments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FragmentMask {
+    /// `tlshello`, or a range of writes like `1-3`.
+    pub packets: String,
+    /// Fragment sizes in bytes, as ranges (`100-200`).
+    pub lengths: Vec<String>,
+    /// Milliseconds between fragments, as ranges.
+    pub delays: Vec<String>,
+}
+
+/// Sends random UDP packets before the real ones.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NoiseMask {
+    /// Seconds before the same address gets noise again (`0` = only once).
+    pub reset: String,
+    pub noise: Vec<NoisePacket>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NoisePacket {
+    /// Number of random bytes, as a range.
+    pub rand: String,
+    /// Milliseconds to wait after this packet, as a range.
+    pub delay: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

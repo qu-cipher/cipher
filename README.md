@@ -46,6 +46,9 @@ for an existing engine, and runs that engine as a child process:
   Rules are checked top to bottom. One-click presets: Iran / China / Russia direct, Block ads. The default
   route can be Direct, so that only matching traffic uses the VPN. Domains routed direct also resolve
   through the direct DNS server.
+- **Anti-DPI options** (*Settings → Anti-DPI*): **Fragment TLS hello** splits the TLS handshake into small,
+  delayed pieces so filters can't read the server name (TCP configs on sing-box and Xray). **UDP noise**
+  sends random packets before an mKCP connection (Xray).
 - **Configs grouped by protocol** (VLESS, Trojan, …, with *Built-In* for Psiphon); groups fold, and the
   grouping toggles from the Configs toolbar.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
@@ -70,7 +73,7 @@ The app doesn't handle these yet:
 - **sing-box 1.12 or newer** (tested on 1.14.3). Install it yourself, put it next to the executable, or use
   *Settings → Engines → Download*.
 - **openvpn**, only for `.ovpn` configs (from your package manager)
-- **Xray**, only for Xray configs or the Xray core (tested with 26.9.9; *Settings → Engines → Download*
+- **Xray**, only for Xray configs or the Xray core (tested with 26.9.9 and 26.10.21; *Settings → Engines → Download*
   installs 26.10.21)
 - **psiphon-tunnel-core**, only for Psiphon Tunnel, which is disabled for now (it needs a network config
   from the Psiphon team)

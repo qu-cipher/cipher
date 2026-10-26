@@ -1042,6 +1042,8 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_mode(MODES.iter().position(|m| *m == settings.mode).unwrap_or(0) as i32);
     state.set_proxy_port(settings.proxy_port.to_string().into());
     state.set_tunnel_proxy(settings.tunnel_proxy);
+    state.set_tls_fragment(settings.tls_fragment);
+    state.set_udp_noise(settings.udp_noise);
     state.set_group_configs(settings.group_configs);
     state.set_core(CORES.iter().position(|c| *c == settings.core).unwrap_or(0) as i32);
     state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
@@ -1080,6 +1082,8 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         // While a half-typed port is invalid, keep the last good one.
         proxy_port: state.get_proxy_port().trim().parse().ok().filter(|&p| p > 0).unwrap_or(store.settings.proxy_port),
         tunnel_proxy: state.get_tunnel_proxy(),
+        tls_fragment: state.get_tls_fragment(),
+        udp_noise: state.get_udp_noise(),
         group_configs: state.get_group_configs(),
         core: CORES.get(state.get_core() as usize).copied().unwrap_or_default(),
         // Rules and presets are edited through their own callbacks.
