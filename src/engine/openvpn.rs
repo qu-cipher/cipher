@@ -1,4 +1,4 @@
-use crate::engine::{paths, process::Process, Engine, EngineError, EngineKind, Status};
+use crate::engine::{paths, process::Process, traffic::{self, Traffic}, Engine, EngineError, EngineKind, Status};
 use crate::import::openvpn::config_needs_credentials;
 use crate::profile::{OpenVpnConfig, Profile, Settings};
 use std::{ffi::OsStr, fs, path::PathBuf};
@@ -21,6 +21,8 @@ pub struct OpenVpnEngine {
     auth_file: Option<PathBuf>,
     /// An inline config written out for this run; deleted on stop.
     temp_config: Option<PathBuf>,
+    /// Rewritten by openvpn every second (traffic counters); deleted on stop.
+    status_file: Option<PathBuf>,
     /// Android: OpenVPN asks us for its TUN over the management socket.
     #[cfg(target_os = "android")]
     management: Option<android::Management>,
@@ -78,6 +80,16 @@ impl Engine for OpenVpnEngine {
             self.auth_file = Some(auth_file);
         }
 
+        // Root-owned after a Tunnel run, but ours to delete (it's in our folder).
+        let status_file = data_dir.join("openvpn-status.txt");
+        let _ = fs::remove_file(&status_file);
+        args.extend([
+            OsStr::new("--status").to_owned(),
+            status_file.clone().into_os_string(),
+            OsStr::new("1").to_owned(),
+        ]);
+        self.status_file = Some(status_file);
+
         #[cfg(target_os = "android")]
         let socket = data_dir.join("openvpn-management");
         #[cfg(target_os = "android")]
@@ -101,7 +113,7 @@ impl Engine for OpenVpnEngine {
         if let Some(mut management) = self.management.take() {
             management.stop();
         }
-        for file in [self.auth_file.take(), self.temp_config.take()].into_iter().flatten() {
+        for file in [self.auth_file.take(), self.temp_config.take(), self.status_file.take()].into_iter().flatten() {
             let _ = fs::remove_file(file);
         }
         Ok(result?)
@@ -126,6 +138,10 @@ impl Engine for OpenVpnEngine {
 
     fn ready(&mut self) -> bool {
         self.process.as_ref().is_some_and(|p| p.log_contains("Initialization Sequence Completed"))
+    }
+
+    fn traffic(&mut self) -> Option<Traffic> {
+        traffic::read_openvpn_status(self.status_file.as_ref()?)
     }
 
     fn authorized(&mut self) -> bool {

@@ -3,7 +3,7 @@
 //! Xray only runs the proxy (SOCKS inbound → one outbound); sing-box sits in front of it for
 //! TUN, the local/system proxy and routing rules (see `engine::chain`).
 
-use crate::engine::{chain::{self, Chain}, paths, process::{Process, hide_console}, Assist, Engine, EngineError, Status};
+use crate::engine::{chain::{self, Chain}, paths, process::{Process, hide_console}, traffic::Traffic, Assist, Engine, EngineError, Status};
 use crate::engine::singbox::generate::{DIRECT_TAG, PROXY_TAG, PROXY_LISTEN};
 use crate::engine::singbox::config::log::LogLevel;
 use crate::profile::{Profile, Settings};
@@ -176,6 +176,10 @@ impl Engine for XrayEngine {
 
     fn authorized(&mut self) -> bool {
         self.chain.as_mut().is_some_and(Chain::authorized)
+    }
+
+    fn traffic(&mut self) -> Option<Traffic> {
+        self.chain.as_mut()?.traffic()
     }
 
     fn assist(&mut self, assist: Assist) {

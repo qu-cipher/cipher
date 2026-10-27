@@ -6,7 +6,7 @@
 
 use crate::android::{self, Consent};
 use crate::engine::openvpn::management::TunSpec;
-use crate::engine::{singbox::SingBoxEngine, Engine, EngineError, Status};
+use crate::engine::{singbox::SingBoxEngine, traffic::Traffic, Engine, EngineError, Status};
 use crate::profile::{Profile, Settings};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::thread::{self, JoinHandle};
@@ -79,6 +79,10 @@ impl Engine for VpnEngine {
             }
         }
         self.singbox.status()
+    }
+
+    fn traffic(&mut self) -> Option<Traffic> {
+        self.singbox.traffic()
     }
 
     /// False until the user allowed the VPN in Android's dialog.

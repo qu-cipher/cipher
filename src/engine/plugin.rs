@@ -13,6 +13,7 @@ use crate::engine::{
     elevated::Elevated,
     paths,
     process::Process,
+    traffic::Traffic,
     Assist, Engine, EngineError, Status,
 };
 use crate::engine::singbox::config::shared::{Network as SingBoxNetwork, TransportOptions};
@@ -235,6 +236,10 @@ impl Engine for PluginEngine {
         self.chain.as_mut().is_some_and(Chain::authorized)
     }
 
+    fn traffic(&mut self) -> Option<Traffic> {
+        self.chain.as_mut()?.traffic()
+    }
+
     fn assist(&mut self, assist: Assist) {
         self.assist = assist;
     }
@@ -313,6 +318,10 @@ impl Engine for Transported {
     /// False until the config's engine runs (the plugin still starting, or the password dialog open).
     fn authorized(&mut self) -> bool {
         self.started && self.inner.authorized()
+    }
+
+    fn traffic(&mut self) -> Option<Traffic> {
+        self.inner.traffic()
     }
 }
 
@@ -569,6 +578,18 @@ mod tests {
             }
         }
 
+        /// The engine's traffic meter saw the request and the response (it polls every 500ms).
+        fn assert_counted(engine: &mut dyn Engine) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(t) = engine.traffic() && t.up > 0 && t.down > 0 {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "no traffic counted: {:?}", engine.traffic());
+                thread::sleep(Duration::from_millis(100));
+            }
+        }
+
         fn proxy_settings() -> Settings {
             // Loopback targets must go through the chain, not around it.
             Settings { mode: ConnectionMode::ProxyOnly, bypass_lan: false, proxy_port: chain::free_port().unwrap(), ..Default::default() }
@@ -610,6 +631,7 @@ mod tests {
             let mut engine = PluginEngine::default();
             run(&mut engine, &profile, &settings);
             assert!(get_through_proxy(settings.proxy_port, web).ends_with("hello"));
+            assert_counted(&mut engine);
             engine.stop().unwrap();
             fs::remove_dir_all(&data).unwrap();
         }
@@ -680,6 +702,28 @@ mod tests {
             run(engine.as_mut(), &profile, &settings);
             assert!(get_through_proxy(settings.proxy_port, web).ends_with("hello"));
             engine.stop().unwrap();
+            let _ = server.kill();
+            fs::remove_dir_all(&data).unwrap();
+        }
+
+        /// A plain sing-box config counts its traffic (Clash API).
+        #[test]
+        #[ignore = "needs sing-box"]
+        fn singbox_counts_traffic() {
+            let data = test_data_dir("traffic");
+            let (mut server, server_port) = fake_server(&data.join("server"));
+            let web = http_server();
+            let profile = Profile::Proxy {
+                name: "Server".into(),
+                outbound: Outbound::Socks(SocksOutbound { server: "127.0.0.1".into(), server_port, ..Default::default() }),
+            };
+            let settings = proxy_settings();
+            let mut engine = crate::engine::singbox::SingBoxEngine::default();
+            run(&mut engine, &profile, &settings);
+            assert!(get_through_proxy(settings.proxy_port, web).ends_with("hello"));
+            assert_counted(&mut engine);
+            engine.stop().unwrap();
+            assert_eq!(engine.traffic(), None);
             let _ = server.kill();
             fs::remove_dir_all(&data).unwrap();
         }

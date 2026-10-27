@@ -1,4 +1,4 @@
-use crate::engine::{elevated::Elevated, paths, process::{Process, hide_console}, Assist, Engine, EngineError, Status};
+use crate::engine::{elevated::Elevated, paths, process::{Process, hide_console}, traffic::{Meter, Traffic}, Assist, Engine, EngineError, Status};
 use crate::profile::{ConnectionMode, Profile, Settings};
 use std::{ffi::{OsStr, OsString}, path::Path, process::Command, sync::Arc};
 
@@ -21,6 +21,8 @@ pub struct SingBoxEngine {
     pub direct_processes: Vec<String>,
     /// A root plugin's admin helper: in Tunnel mode sing-box runs in it too (one password prompt).
     pub elevated: Option<Arc<Elevated>>,
+    /// Reads the traffic counters from this run's Clash API.
+    meter: Option<Meter>,
 }
 
 impl Engine for SingBoxEngine {
@@ -30,7 +32,9 @@ impl Engine for SingBoxEngine {
         }
 
         let data_dir = paths::data_dir()?;
-        let config = generate::build_config(profile, settings, &data_dir, &self.direct_processes)?;
+        let mut config = generate::build_config(profile, settings, &data_dir, &self.direct_processes)?;
+        let meter = Meter::new()?;
+        config.experimental.get_or_insert_default().clash_api = Some(meter.clash_api());
         let config_path = data_dir.join("sing-box.json");
         paths::write_private(&config_path, &serde_json::to_string_pretty(&config)?)?;
 
@@ -56,10 +60,13 @@ impl Engine for SingBoxEngine {
             Process::spawn("sing-box", &binary, args, &log_path)?
         });
         self.system_proxy = settings.mode == ConnectionMode::SystemProxy;
+        meter.start();
+        self.meter = Some(meter);
         Ok(())
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
+        self.meter = None;
         if let Some(mut process) = self.process.take() {
             process.stop()?;
         }
@@ -75,6 +82,10 @@ impl Engine for SingBoxEngine {
 
     fn authorized(&mut self) -> bool {
         self.process.as_ref().is_some_and(Process::authorized)
+    }
+
+    fn traffic(&mut self) -> Option<Traffic> {
+        self.meter.as_ref()?.get()
     }
 
     fn assist(&mut self, assist: Assist) {

@@ -6,7 +6,8 @@ import { ConnectPanel } from "./panels/connect-panel.slint";
 import { LibraryPanel } from "./panels/library-panel.slint";
 import { Dialogs } from "dialogs.slint";
 
-// Rust needs these to talk to the UI.
+// Rust needs these to talk to the UI. The tray is desktop-only, but app.rs is shared.
+export { Tray } from "tray.slint";
 export { AppState, ConnectionState, ConfigData, EngineData, FieldData, PluginData, PresetData, RuleData, SubscriptionData }
 
 export component AppWindow inherits Window {

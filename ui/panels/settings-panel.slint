@@ -38,6 +38,10 @@ component Row inherits HorizontalLayout {
     VerticalLayout {
         horizontal-stretch: 1;
         alignment: center;
+        // Rows behind an `if` (Engines) otherwise report a wrapped hint as one line, so the
+        // Section's card ended above them and the text spilled out. Set here, not on the Row:
+        // there it would replace the Row's own minimum and ignore taller controls (a ComboBox).
+        min-height: self.preferred-height;
 
         Text {
             text: root.label;
@@ -103,20 +107,6 @@ export component SettingsPanel inherits ScrollView {
                 hint: engine.status;
             }
 
-            if !AppState.bundled-engines: Row {
-                label: "Core";
-                hint: "Runs VLESS, VMess, Trojan and Shadowsocks configs. XHTTP, mKCP and VLESS encryption always use Xray, unless a core plugin can run them.";
-                VerticalLayout {
-                    alignment: center;
-                    ComboBox {
-                        width: 150px;
-                        model: AppState.cores;
-                        current-index <=> AppState.core;
-                        selected => { AppState.settings-changed(); }
-                    }
-                }
-            }
-
             Row {
                 label: "OpenVPN";
                 hint: AppState.openvpn-status;
@@ -133,6 +123,20 @@ export component SettingsPanel inherits ScrollView {
                         primary: true;
                         enabled: !AppState.psiphon-busy && AppState.connection == ConnectionState.disconnected;
                         clicked => { AppState.install-psiphon(); }
+                    }
+                }
+            }
+
+            if !AppState.bundled-engines: Row {
+                label: "Core";
+                hint: "Runs VLESS, VMess, Trojan and Shadowsocks configs. XHTTP, mKCP and VLESS encryption always use Xray, unless a core plugin can run them.";
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 150px;
+                        model: AppState.cores;
+                        current-index <=> AppState.core;
+                        selected => { AppState.settings-changed(); }
                     }
                 }
             }
@@ -273,6 +277,33 @@ export component SettingsPanel inherits ScrollView {
                     placeholder-text: "8.8.8.8";
                     text <=> AppState.dns-direct;
                     edited => { AppState.settings-changed(); }
+                }
+            }
+        }
+
+        if AppState.desktop: Section {
+            title: "WINDOW";
+
+            Row {
+                label: "UI scale";
+                hint: "Size of the window and its text. System follows your display settings.";
+                VerticalLayout {
+                    alignment: center;
+                    ComboBox {
+                        width: 110px;
+                        model: AppState.ui-scales;
+                        current-index <=> AppState.ui-scale;
+                        selected => { AppState.ui-scale-changed(); }
+                    }
+                }
+            }
+
+            Row {
+                label: "Close to tray";
+                hint: "Closing the window keeps Cipher and the connection running in the tray; quit from the tray menu. Without a tray, the window minimizes.";
+                Toggle {
+                    checked <=> AppState.close-to-tray;
+                    toggled => { AppState.settings-changed(); }
                 }
             }
         }

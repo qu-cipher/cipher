@@ -65,6 +65,12 @@ for an existing engine, and runs that engine as a child process:
     server (domain, encryption and your resolver list are set per config).
 - **Configs grouped by protocol** (VLESS, Trojan, …, Psiphon, Plugins); groups fold, and the
   grouping toggles from the Configs toolbar.
+- **Traffic** under the connect button: download / upload speed and this connection's totals.
+- **Tray icon** (desktop): green while connected; its menu shows the window, connects / disconnects and quits.
+  *Settings → Window → Close to tray* (on by default) keeps Cipher and the connection running when the window
+  is closed. On Linux the tray needs a StatusNotifierItem host (KDE, most others; GNOME with an extension);
+  without one, closing minimizes instead.
+- **UI scale** (desktop, *Settings → Window*): System, or 100–200%.
 - TCP latency test, a per-subscription filter, an OpenVPN username/password prompt, and DNS without leaks
   (DNS-over-HTTPS through the tunnel).
 - **Engine management:** downloads pinned sing-box and Xray releases, and a pinned Psiphon ConsoleClient
@@ -202,7 +208,7 @@ The APK bundles sing-box and OpenVPN.
 | `src/routing.rs` | Routing rules, presets and the default route; input parsing and normalization |
 | `src/store.rs` | Saved state (`state.json`): configs, subscriptions, selection, settings |
 | `src/import/` | Share-link parsers (one file per protocol in `link/`), WireGuard/OpenVPN files, Psiphon server entries and configs, subscriptions, sing-box JSON |
-| `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Xray (`xray.rs`, `xray/`) and Psiphon engines chained behind sing-box (`chain.rs`), plugin engines and transports (`plugin.rs`), the admin helper for root plugins (`elevated.rs`) |
+| `src/engine/` | `Engine` trait, child-process handling, binary lookup, engine downloads and permissions, OpenVPN engine, Xray (`xray.rs`, `xray/`) and Psiphon engines chained behind sing-box (`chain.rs`), plugin engines and transports (`plugin.rs`), the admin helper for root plugins (`elevated.rs`), traffic counters (`traffic.rs`) |
 | `src/plugin.rs`, `src/plugin/` | Plugin manifests (validation, placeholders), installed plugins, and installing them (GitHub checks, download, SHA-256) |
 | `plugins/` | Official plugin manifests, built into the app and published here (e.g. `masterdnsvpn.json`) |
 | `src/engine/singbox/config/` | Typed serde model of the sing-box config (client-side subset, 1.12+ format only) |

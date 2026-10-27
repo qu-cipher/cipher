@@ -4,7 +4,7 @@
 //! connecting, latency tests, file dialogs) runs on background threads, which post their
 //! results back to the UI thread with `upgrade_in_event_loop`.
 
-use crate::engine::{self, Engine, EngineError, Status, install, openvpn, paths, process, psiphon, singbox, xray};
+use crate::engine::{self, Engine, EngineError, Status, install, openvpn, paths, process, psiphon, singbox, traffic::Traffic, xray};
 use crate::engine::singbox::config::log::LogLevel;
 use crate::import::{self, ImportError};
 use crate::engine::singbox::generate::PROXY_LISTEN;
@@ -15,7 +15,7 @@ use crate::store::{self, Store};
 use crate::{AppState, AppWindow, ConfigData, ConnectionState, PresetData, RuleData, SubscriptionData};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, VecModel, Weak};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     error::Error,
     net::{TcpStream, ToSocketAddrs},
     path::Path,
@@ -32,6 +32,8 @@ const LOG_LEVELS: [LogLevel; 4] = [LogLevel::Debug, LogLevel::Info, LogLevel::Wa
 /// Same order as the mode switch in the UI.
 const MODES: [ConnectionMode; 3] = [ConnectionMode::Tunnel, ConnectionMode::SystemProxy, ConnectionMode::ProxyOnly];
 /// Same order as `route-defaults` / `rule-targets` in the UI.
+/// Settings → APPEARANCE → UI scale, in the order of `AppState.ui-scales`.
+const UI_SCALES: [Option<u16>; 6] = [None, Some(100), Some(125), Some(150), Some(175), Some(200)];
 const ROUTE_DEFAULTS: [Target; 2] = [Target::Proxy, Target::Direct];
 const TARGETS: [Target; 3] = [Target::Proxy, Target::Direct, Target::Block];
 /// Same order as `cores` in the UI.
@@ -71,6 +73,8 @@ struct Shared {
     engine: Mutex<Option<Box<dyn Engine + Send>>>,
     state: Mutex<ConnectionState>,
     connected_since: Mutex<Option<Instant>>,
+    /// The engine's last few traffic readings (speeds average over them).
+    traffic: Mutex<VecDeque<(Instant, Traffic)>>,
     cancel: AtomicBool,
     filter: Mutex<Filter>,
     latency: Mutex<HashMap<u64, Latency>>,
@@ -89,11 +93,20 @@ struct Shared {
 type Ctx = Arc<Shared>;
 
 pub fn run() -> Result<(), Box<dyn Error>> {
+    let store = Store::load();
+    // The winit backend reads this once, when it creates the window. A value the user set wins.
+    #[cfg(not(target_os = "android"))]
+    if let Some(percent) = store.settings.ui_scale
+        && std::env::var_os(SCALE_FACTOR_VAR).is_none()
+    {
+        // SAFETY: single-threaded at this point; nothing else reads the environment yet.
+        unsafe { std::env::set_var(SCALE_FACTOR_VAR, (f32::from(percent) / 100.0).to_string()) };
+    }
     let ui = AppWindow::new()?;
     // Matches cipher_client.desktop, so the shell shows the launcher icon for this window.
     #[cfg(not(target_os = "android"))]
     slint::set_xdg_app_id("cipher_client")?;
-    let (ctx, _monitor) = init(&ui);
+    let (ctx, _monitor) = init(&ui, store);
 
     ui.run()?;
 
@@ -106,12 +119,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 }
 
 /// Loads the store, wires up the window and starts the monitor (keep the timer alive).
-fn init(ui: &AppWindow) -> (Ctx, Timer) {
+fn init(ui: &AppWindow, store: Store) -> (Ctx, Timer) {
     let ctx: Ctx = Arc::new(Shared {
-        store: Mutex::new(Store::load()),
+        store: Mutex::new(store),
         engine: Mutex::new(None),
         state: Mutex::new(ConnectionState::Disconnected),
         connected_since: Mutex::new(None),
+        traffic: Mutex::new(VecDeque::new()),
         cancel: AtomicBool::new(false),
         filter: Mutex::new(Filter::All),
         latency: Mutex::new(HashMap::new()),
@@ -124,6 +138,7 @@ fn init(ui: &AppWindow) -> (Ctx, Timer) {
     });
 
     bind_window(ui);
+    tray::init(ui, &ctx);
     bind_callbacks(ui, &ctx);
     load_settings(ui, &ctx);
     refresh_routing(ui, &ctx);
@@ -154,9 +169,23 @@ fn bind_window(ui: &AppWindow) {
             }
         }
     });
-    ui.on_close_window(|| {
-        let _ = slint::quit_event_loop();
-    });
+}
+
+const SCALE_FACTOR_VAR: &str = "SLINT_SCALE_FACTOR";
+
+/// Settings → UI scale changed: rescales the open window, keeping its logical size.
+fn ui_scale_changed(ui: &AppWindow, ctx: &Ctx) {
+    settings_changed(ui, ctx);
+    let Some(percent) = ctx.store.lock().unwrap().settings.ui_scale else {
+        // The system's own factor is only known when the window is created.
+        notify(ui, ctx, "The system scale applies the next time Cipher starts.", false);
+        return;
+    };
+    let window = ui.window();
+    let size = window.size().to_logical(window.scale_factor());
+    let scale_factor = f32::from(percent) / 100.0;
+    let _ = window.dispatch_event_with_result(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor });
+    window.set_size(size.to_physical(scale_factor));
 }
 
 /// Registers an `AppState` callback that gets the window and the shared state.
@@ -174,6 +203,7 @@ macro_rules! on {
 }
 
 mod plugins;
+mod tray;
 
 fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
     plugins::bind(ui, ctx);
@@ -188,6 +218,7 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
     on!(ui, ctx, on_select_config, |ui, ctx, id: i32| select_config(&ui, ctx, id as u64));
     on!(ui, ctx, on_remove_config, |ui, ctx, id: i32| remove_config(&ui, ctx, id as u64));
     on!(ui, ctx, on_filter_changed, |ui, ctx, index: i32| filter_changed(&ui, ctx, index));
+    on!(ui, ctx, on_ui_scale_changed, |ui, ctx| ui_scale_changed(&ui, ctx));
     on!(ui, ctx, on_grouping_changed, |ui, ctx| {
         settings_changed(&ui, ctx);
         refresh_configs(&ui, ctx);
@@ -851,12 +882,15 @@ fn set_state(ui: &AppWindow, ctx: &Ctx, state: ConnectionState) {
     let app = ui.global::<AppState>();
     app.set_connection(state);
     app.set_uptime("00:00:00".into());
+    ctx.traffic.lock().unwrap().clear();
+    app.set_traffic_known(false);
     if state != ConnectionState::Connected {
         app.set_proxy_address(SharedString::new());
     }
     if state != ConnectionState::Connecting {
         app.set_cancelling(false);
     }
+    tray::update(state, app.get_cancelling());
 }
 
 fn toggle_connection(ui: &AppWindow, ctx: &Ctx) {
@@ -867,6 +901,7 @@ fn toggle_connection(ui: &AppWindow, ctx: &Ctx) {
         ConnectionState::Connecting => {
             ctx.cancel.store(true, Ordering::Relaxed);
             ui.global::<AppState>().set_cancelling(true);
+            tray::update(state, true);
         }
         ConnectionState::Disconnecting => {}
     }
@@ -1032,15 +1067,16 @@ fn monitor_tick(ui: &AppWindow, ctx: &Ctx) {
     }
 
     // try_lock: a disconnect thread may hold the engine while it stops; don't block the UI.
-    let failure = match ctx.engine.try_lock() {
-        Ok(mut engine) => match engine.as_mut().map(|e| e.status()) {
-            Some(Status::Failed(reason)) => {
+    let (failure, traffic) = match ctx.engine.try_lock() {
+        Ok(mut engine) => match engine.as_mut().map(|e| (e.status(), e.traffic())) {
+            Some((Status::Failed(reason), _)) => {
                 engine.take();
-                Some(reason)
+                (Some(reason), None)
             }
-            _ => None,
+            Some((_, traffic)) => (None, traffic),
+            None => (None, None),
         },
-        Err(_) => None,
+        Err(_) => (None, None),
     };
 
     if let Some(reason) = failure {
@@ -1054,6 +1090,34 @@ fn monitor_tick(ui: &AppWindow, ctx: &Ctx) {
         let uptime = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
         ui.global::<AppState>().set_uptime(uptime.into());
     }
+    if let Some(traffic) = traffic {
+        show_traffic(ui, ctx, traffic);
+    }
+}
+
+/// Readings the speeds average over: engines refresh their counters about once a second, out of
+/// step with this tick, so a single interval would jump between 0 and double.
+const TRAFFIC_SAMPLES: usize = 3;
+
+fn show_traffic(ui: &AppWindow, ctx: &Ctx, traffic: Traffic) {
+    let mut samples = ctx.traffic.lock().unwrap();
+    samples.push_back((Instant::now(), traffic));
+    if samples.len() > TRAFFIC_SAMPLES {
+        samples.pop_front();
+    }
+    let (first_at, first) = samples[0];
+    let seconds = first_at.elapsed().as_secs_f64();
+    let speed = |now: u64, then: u64| match seconds > 0.0 {
+        true => format!("{}/s", format_bytes((now.saturating_sub(then) as f64 / seconds) as u64)),
+        false => "0 B/s".into(),
+    };
+
+    let state = ui.global::<AppState>();
+    state.set_upload_speed(speed(traffic.up, first.up).into());
+    state.set_download_speed(speed(traffic.down, first.down).into());
+    state.set_upload_total(format_bytes(traffic.up).into());
+    state.set_download_total(format_bytes(traffic.down).into());
+    state.set_traffic_known(true);
 }
 
 // ───────────────────────────── Settings ─────────────────────────────
@@ -1074,6 +1138,8 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_tls_fragment(settings.tls_fragment);
     state.set_udp_noise(settings.udp_noise);
     state.set_group_configs(settings.group_configs);
+    state.set_close_to_tray(settings.close_to_tray);
+    state.set_ui_scale(UI_SCALES.iter().position(|s| *s == settings.ui_scale).unwrap_or(0) as i32);
     plugins::refresh_cores(&state, &settings.core);
     state.set_route_default(ROUTE_DEFAULTS.iter().position(|t| *t == settings.routing.default).unwrap_or(0) as i32);
     if let Ok(dir) = paths::data_dir() {
@@ -1103,6 +1169,8 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         tls_fragment: state.get_tls_fragment(),
         udp_noise: state.get_udp_noise(),
         group_configs: state.get_group_configs(),
+        close_to_tray: state.get_close_to_tray(),
+        ui_scale: UI_SCALES.get(state.get_ui_scale() as usize).copied().flatten(),
         core: plugins::core_choices(&store.settings.core).into_iter().nth(state.get_core() as usize).map(|(core, _)| core).unwrap_or_default(),
         // Rules and presets are edited through their own callbacks.
         routing: Routing {

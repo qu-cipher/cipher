@@ -4,6 +4,54 @@ import { AppState, ConnectionState } from "../state.slint";
 import { PillButton, ProtocolBadge } from "../components/buttons.slint";
 import { TabBar } from "../components/tab-bar.slint";
 
+// One direction of the traffic box: speed, and the total below it.
+component TrafficStat inherits HorizontalLayout {
+    in property <image> icon;
+    in property <color> tint;
+    in property <string> label;
+    in property <string> speed;
+    in property <string> total;
+    in property <bool> live;
+    spacing: 8px;
+
+    VerticalLayout {
+        alignment: center;
+        Rectangle {
+            width: 24px;
+            height: 24px;
+            border-radius: 12px;
+            background: root.tint.transparentize(root.live ? 82% : 92%);
+
+            Image {
+                source: root.icon;
+                width: 14px;
+                height: 14px;
+                colorize: root.live ? root.tint : Theme.text-faint;
+            }
+        }
+    }
+
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+
+        Text {
+            text: root.live ? root.speed : "—";
+            font-size: 13px;
+            font-weight: 700;
+            color: root.live ? Theme.text : Theme.text-faint;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.live ? root.total + " total" : root.label;
+            font-size: 10px;
+            color: Theme.text-muted;
+            overflow: elide;
+        }
+    }
+}
+
 export component ConnectPanel inherits Rectangle {
     // The power button's diameter.
     in property <length> size: 128px;
@@ -27,7 +75,9 @@ export component ConnectPanel inherits Rectangle {
     VerticalLayout {
         alignment: center;
         padding: 24px;
-        spacing: 14px;
+        padding-top: 12px;
+        padding-bottom: 12px;
+        spacing: 12px;
 
         HorizontalLayout {
             alignment: center;
@@ -141,6 +191,50 @@ export component ConnectPanel inherits Rectangle {
             current <=> AppState.mode;
             enabled: !root.busy;
             changed => { AppState.mode-changed(); }
+        }
+
+        // Speeds and totals of this connection.
+        Rectangle {
+            height: 48px;
+            border-radius: 12px;
+            background: Theme.surface;
+            border-width: 1px;
+            border-color: Theme.border;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+
+                TrafficStat {
+                    horizontal-stretch: 1;
+                    icon: @image-url("../../assets/icons/MdiArrowDown.svg");
+                    tint: Theme.accent;
+                    label: "Download";
+                    speed: AppState.download-speed;
+                    total: AppState.download-total;
+                    live: root.connected && AppState.traffic-known;
+                }
+
+                VerticalLayout {
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                    Rectangle {
+                        width: 1px;
+                        background: Theme.border;
+                    }
+                }
+
+                TrafficStat {
+                    horizontal-stretch: 1;
+                    icon: @image-url("../../assets/icons/MdiArrowUp.svg");
+                    tint: Theme.connected;
+                    label: "Upload";
+                    speed: AppState.upload-speed;
+                    total: AppState.upload-total;
+                    live: root.connected && AppState.traffic-known;
+                }
+            }
         }
 
         // The selected config; clicking it jumps to the list.

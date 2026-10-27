@@ -1,0 +1,36 @@
+// The desktop tray icon. A SystemTrayIcon must be the root of its own component, so it can't
+// read AppState (each component has its own copy of a global): Rust sets these properties.
+export component Tray inherits SystemTrayIcon {
+    in property <bool> connected;
+    // "Cipher: Connected" and so on
+    in property <string> status;
+    // "Connect" / "Disconnect" / "Cancel", like the power button
+    in property <string> action: "Connect";
+    in property <bool> action-enabled: true;
+
+    callback show-window();
+    callback toggle-connection();
+    callback quit();
+
+    icon: root.connected ? @image-url("../assets/tray-connected.png") : @image-url("../assets/tray.png");
+    title: "Cipher";
+    tooltip: root.status;
+    clicked => { root.show-window(); }
+
+    Menu {
+        MenuItem {
+            title: "Show Cipher";
+            activated => { root.show-window(); }
+        }
+        MenuItem {
+            title: root.action;
+            enabled: root.action-enabled;
+            activated => { root.toggle-connection(); }
+        }
+        MenuSeparator { }
+        MenuItem {
+            title: "Quit";
+            activated => { root.quit(); }
+        }
+    }
+}

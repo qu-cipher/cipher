@@ -251,7 +251,7 @@ Presets: Iran direct (`geosite-category-ir` + `geoip-ir`), China direct (`geosit
 ## 7. `experimental`
 
 - `cache_file`: Generated, enabled at `<data>/cache.db`.
-- `clash_api`: modeled but not emitted yet. It's planned for latency tests and switching `selector` outbounds from the UI (`external_controller: 127.0.0.1:<port>` + a random `secret`).
+- `clash_api`: not from `build_config`; `SingBoxEngine::start` adds it to every run (`external_controller: 127.0.0.1:<free port>` + a random `secret`) for the connect panel's traffic box: `engine::traffic::Meter` polls `GET /connections` (`uploadTotal` / `downloadTotal`) every 500ms. It counts everything sing-box routes, direct traffic included. Also planned for latency tests and switching `selector` outbounds.
 - `v2ray_api` / `pprof`: not modeled. They need custom sing-box builds.
 
 ## 8. Privileges

@@ -6,6 +6,7 @@ pub mod install;
 pub mod paths;
 pub mod process;
 pub mod singbox;
+pub mod traffic;
 #[cfg(target_os = "android")]
 pub mod vpn;
 pub mod openvpn;
@@ -83,6 +84,11 @@ pub trait Engine {
     /// False while the engine waits for the admin password (Tunnel mode on Linux).
     fn authorized(&mut self) -> bool {
         true
+    }
+
+    /// Bytes moved since the engine started, when it reports them.
+    fn traffic(&mut self) -> Option<traffic::Traffic> {
+        None
     }
 
     /// Help from a transport plugin running under this engine; call before `start`.

@@ -92,6 +92,12 @@ export global AppState {
     in-out property <int> mode;
     // "127.0.0.1:2080" while connected with the local proxy running, else empty
     in property <string> proxy-address;
+    // Traffic while connected (formatted in Rust); unknown until the engine reports it
+    in property <bool> traffic-known;
+    in property <string> download-speed;
+    in property <string> upload-speed;
+    in property <string> download-total;
+    in property <string> upload-total;
 
     // ── Selection ──
     in property <int> selected-id: -1;
@@ -169,6 +175,11 @@ export global AppState {
     in property <bool> notice-is-error;
 
     // ── Settings ──
+    // Desktop only (Settings → WINDOW): Android has no window scale or tray.
+    out property <bool> desktop: !bundled-engines;
+    out property <[string]> ui-scales: ["System", "100%", "125%", "150%", "175%", "200%"];
+    in-out property <int> ui-scale;
+    in-out property <bool> close-to-tray: true;
     out property <[string]> log-levels: ["debug", "info", "warn", "error"];
     in-out property <int> log-level: 1;
     in-out property <string> dns-remote;
@@ -246,6 +257,8 @@ export global AppState {
     callback show-subscription(int);
 
     callback settings-changed();
+    // after `ui-scale` changed: also rescales the window
+    callback ui-scale-changed();
     // index into `presets`
     callback toggle-preset(int);
     // index into `rules`, or -1 to add one

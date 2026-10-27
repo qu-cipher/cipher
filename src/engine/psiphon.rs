@@ -2,7 +2,7 @@
 //! (a server entry from `psiphond generate`) or private network (a client config) and serves a
 //! local SOCKS proxy, with sing-box in front (see `engine::chain`).
 
-use crate::engine::{chain::{self, Chain}, paths, process::Process, Assist, Engine, EngineError, Status};
+use crate::engine::{chain::{self, Chain}, paths, process::Process, traffic::Traffic, Assist, Engine, EngineError, Status};
 use crate::engine::singbox::config::shared::Network;
 use crate::profile::{Profile, PsiphonSource, Settings};
 use serde_json::{Map, Value};
@@ -116,6 +116,10 @@ impl Engine for PsiphonEngine {
 
     fn authorized(&mut self) -> bool {
         self.chain.as_mut().is_some_and(Chain::authorized)
+    }
+
+    fn traffic(&mut self) -> Option<Traffic> {
+        self.chain.as_mut()?.traffic()
     }
 
     fn assist(&mut self, assist: Assist) {

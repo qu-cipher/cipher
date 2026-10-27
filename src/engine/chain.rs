@@ -6,7 +6,7 @@
 //! happens before a TUN exists. Its later connections are routed direct by process name,
 //! or the TUN would send them back into it.
 
-use crate::engine::{process::Process, singbox::SingBoxEngine, Assist, Engine, EngineError, Status};
+use crate::engine::{process::Process, singbox::SingBoxEngine, traffic::Traffic, Assist, Engine, EngineError, Status};
 use crate::engine::singbox::config::{
     outbound::{Outbound, socks::SocksOutbound},
     shared::Network,
@@ -105,6 +105,10 @@ impl Chain {
 
     pub fn ready(&mut self) -> bool {
         self.singbox.as_mut().is_some_and(Engine::ready)
+    }
+
+    pub fn traffic(&mut self) -> Option<Traffic> {
+        self.singbox.as_mut()?.traffic()
     }
 
     /// False until sing-box runs (the upstream still starting, or the admin password dialog is open).

@@ -47,6 +47,9 @@ src/
                      (Android NativeActivity: sets paths::set_android_data_dir, slint::android::init, app::run)
   main.rs            desktop binary: calls cipher_client::main()
   app.rs   (~1100 lines) UI glue: callbacks, threads, list refresh, connect/disconnect, settings, engines
+  app/tray.rs        Tray (ui/tray.slint, a SystemTrayIcon-rooted component exported from both windows; thread_local, not on
+                     Android or in tests), update() from set_state, close(): quit, or with close_to_tray hide (tray host checked
+                     via dbus-send NameHasOwner org.kde.StatusNotifierWatcher on Linux; none → minimize). Handles both our ✕ and WM close
   app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, anti-DPI, grouped
                      Configs list with a Psiphon entry; never connects: safe)
   profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name, source: PsiphonSource}, Xray{name, outbound: XrayOutbound}},
@@ -54,7 +57,7 @@ src/
                      PsiphonSource {ServerEntry(hex) → "server_entry", Network(map) → "network"} (serde-flattened),
                      ConnectionMode {Tunnel(default), SystemProxy, ProxyOnly}, Settings (dns, bypass_lan, proxy_port=2080, tunnel_proxy, routing,
                      core: xray::Core {SingBox(default), Xray, Plugin(id)}, group_configs=true,
-                     tls_fragment, udp_noise: anti-DPI toggles, default off);
+                     tls_fragment, udp_noise: anti-DPI toggles, default off; ui_scale: Option<u16> percent, None = system; close_to_tray=true);
                      Profile::group() = group label in the Configs list ("VLESS", …, "Psiphon");
                      Profile::Custom{name, outbound: Value} = a core plugin's new protocol (raw sing-box outbound), group = its type
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
@@ -71,6 +74,8 @@ src/
   engine/singbox/generate.rs   build_config(profile, settings, data_dir, direct_processes) → SingBoxConfig (tags: proxy, direct, tun-in, mixed-in)
   engine/singbox/generate/routing.rs  routing rules → route rules + remote geo rule sets (SagerNet .srs via proxy) + DNS rules
   engine/singbox/config/       serde model of sing-box config (inbound/, outbound/, endpoint, dns, route, shared/{tls,transport,dial,multiplex,hysteria}, tests.rs)
+  engine/traffic.rs  Traffic {up, down} totals; Meter (sing-box Clash API on a free port + random secret, polled on a thread);
+                     read_openvpn_status (openvpn --status <data>/openvpn-status.txt 1, TUN/TAP bytes). Engine::traffic() (wrappers delegate)
   engine/chain.rs    Chain: upstream process with a local SOCKS port + inner SingBoxEngine (socks outbound, process_name→direct),
                      started once `upstream_up`; shared by Xray and Psiphon
   engine/xray.rs     XrayEngine (xray.json → `xray run -test` → `xray run`; up = SOCKS port open), Core, effective() (core setting)
@@ -131,7 +136,7 @@ ui/
   panels/            connect, library (tabs: subscriptions, configs, settings), configs, subscriptions, settings
   components/        buttons, config-item, group-header, rule-item, sub-item, tab-bar, title-bar, sheet
 plugins/             official manifests (masterdnsvpn.json: engine, TOML config + client_resolvers.txt via `files`, `-domains` flag)
-assets/              Geist.ttf, Mdi*.svg icons
+assets/              Geist.ttf, Mdi*.svg icons, tray.png / tray-connected.png (64px, from icon.svg; green = #3ddc97)
 tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2) — must round-trip unchanged
 ```
 
@@ -154,6 +159,11 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   (`Outbound::tcp_tls_mut`), Xray `finalmask.tcp` fragment (`tlshello`) on non-kcp; `udp_noise` → Xray `finalmask.udp`
   noise on kcp only. Both shapes pass `xray run -test` 26.10.21 / `sing-box check` (also with Reality). Old
   `kcpSettings.header` still accepted by 26.10.21 (no `mkcp-legacy` migration needed yet).
+- **UI scale** (desktop, Settings → WINDOW, shown when `AppState.desktop`): `run()` loads the Store before creating the window and sets `SLINT_SCALE_FACTOR` from
+  `ui_scale` (unless already set; winit reads it only at window creation). `ui_scale_changed` applies a percentage live
+  (`ScaleFactorChanged` + `set_size` to the same logical size); "System" needs a restart (system factor unknown then).
+- **Traffic box** (connect panel, under the power button): `monitor_tick` reads `Engine::traffic()` (try_lock), keeps 3 samples
+  in `Shared.traffic` (speeds average over them; counters update out of step with the tick), cleared in `set_state`.
 - **Latency test**: TCP connect (3s, 16 workers) to `Profile::tcp_endpoint()`; UDP protocols skipped.
 - **UI contract**: Rust owns data; UI only calls `AppState` callbacks. Adding a UI feature = property/callback in
   `state.slint` + handler in `app.rs` `bind_callbacks` (plugin UI handlers: `app/plugins.rs`).
@@ -163,7 +173,7 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   Tests: `paths::TEST_DATA_DIR` (thread-local) keeps plugin tests out of the real data dir.
 - **Runtime files** (`~/.local/share/cipher_client`, Windows `%APPDATA%\cipher_client`): state.json,
   sing-box.json, sing-box.log, cache.db, openvpn.log, openvpn.ovpn + openvpn-auth.txt (temporary),
-  xray.json, xray.log, psiphon.json, psiphon.log, psiphon/ (its datastore), bin/, plugins/<id>/, plugin-<id>.log.
+  openvpn-status.txt (traffic, removed on stop), xray.json, xray.log, psiphon.json, psiphon.log, psiphon/ (its datastore), bin/, plugins/<id>/, plugin-<id>.log.
 
 ## Android (in progress, see docs/android-plan.md)
 - Same crate; `target_os = "android"` gates. Slint features are per target in Cargo.toml (desktop = Slint defaults,
@@ -233,7 +243,7 @@ Pending / unverified:
 
 Known unsupported (rejected on import with a clear reason): AmneziaWG, ShadowTLS links, Clash YAML subscriptions.
 Xray 26 limits (checked with `xray run -test`): no `allowInsecure`, no plain VLESS/Trojan to public addresses, no h2/QUIC.
-Modeled but unused: `selector`/`urltest` outbounds, `clash_api` (planned for latency tests / server switching).
+Modeled but unused: `selector`/`urltest` outbounds. `clash_api` is emitted only for the traffic meter (could also serve latency tests / server switching).
 
 Environment: CachyOS (Arch), fish shell, UFW enabled, system sing-box at `/usr/bin/sing-box`; v2rayN is also installed
 and caused unrelated sudo prompts. Headless screenshot test can hide system sing-box from PATH to test the download flow.

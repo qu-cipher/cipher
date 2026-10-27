@@ -260,6 +260,10 @@ pub struct Settings {
     pub tls_fragment: bool,
     /// Anti-DPI: send random UDP packets before the real ones (mKCP configs, Xray only).
     pub udp_noise: bool,
+    /// Desktop UI size in percent; `None` follows the system's scale factor.
+    pub ui_scale: Option<u16>,
+    /// Desktop: closing the window hides it to the tray (the connection keeps running).
+    pub close_to_tray: bool,
 }
 
 impl Settings {
@@ -284,6 +288,8 @@ impl Default for Settings {
             group_configs: true,
             tls_fragment: false,
             udp_noise: false,
+            ui_scale: None,
+            close_to_tray: true,
         }
     }
 }

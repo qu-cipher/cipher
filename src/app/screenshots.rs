@@ -203,7 +203,7 @@ fn start() -> (AppWindow, Ctx, Timer, Driver) {
 
     let ui = AppWindow::new().unwrap();
     ui.show().unwrap();
-    let (ctx, monitor) = init(&ui);
+    let (ctx, monitor) = init(&ui, crate::store::Store::load());
     let d = Driver {
         window,
         queue,
@@ -221,6 +221,17 @@ fn start() -> (AppWindow, Ctx, Timer, Driver) {
 fn routing_screenshots() {
     let (ui, _ctx, _monitor, d) = start();
     let state = ui.global::<AppState>();
+    d.shot("r00-traffic-idle");
+    // The traffic box as it looks connected (UI state only).
+    state.set_connection(ConnectionState::Connected);
+    state.set_uptime("00:12:34".into());
+    state.set_traffic_known(true);
+    state.set_download_speed("2.4 MB/s".into());
+    state.set_upload_speed("312.5 KB/s".into());
+    state.set_download_total("1.3 GB".into());
+    state.set_upload_total("86.2 MB".into());
+    d.shot("r00b-traffic-connected");
+    state.set_connection(ConnectionState::Disconnected);
     state.set_current_tab(3);
     d.shot("r01-settings");
     state.set_core(1);
@@ -302,6 +313,9 @@ fn routing_screenshots() {
     d.shot("r07-rules-scrolled");
     d.hover(600.0, 330.0);
     d.shot("r08-rule-hover");
+    // The bottom: appearance, logs, about.
+    d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: -5000.0 });
+    d.shot("r09-settings-bottom");
     d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: 1000.0 });
 
     plugin_frames(&ui, &_ctx, &d);
@@ -663,7 +677,7 @@ fn phone_screenshots() {
     d.click(100.0, (HEIGHT - 34) as f32); // bottom bar: Connect
     d.shot("p03-connect-selected");
     assert_eq!(state.get_mode(), 0);
-    d.click(300.0, 514.0); // mode: Proxy only (2nd of 2 tabs)
+    d.click(300.0, 484.0); // mode: Proxy only (2nd of 2 tabs)
     d.shot("p04-proxy-only");
     assert_eq!(state.get_mode(), 2);
 
