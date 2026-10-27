@@ -202,6 +202,8 @@ export global AppState {
     in property <string> app-version;
 
     // ── Engines ──
+    // Engines ship inside the app (Android): no downloads, and only sing-box + OpenVPN.
+    in property <bool> bundled-engines;
     in property <string> singbox-status;
     in property <bool> singbox-installed;
     in property <string> openvpn-status;

@@ -5,7 +5,39 @@ import { IconButton, PillButton } from "../components/buttons.slint";
 import { ConfigItem } from "../components/config-item.slint";
 import { GroupHeader } from "../components/group-header.slint";
 
+// Add / Import / Test.
+component Actions inherits HorizontalLayout {
+    spacing: 6px;
+    alignment: start;
+
+    PillButton {
+        text: "Add";
+        icon: @image-url("../../assets/icons/MdiPlus.svg");
+        primary: true;
+        clicked => {
+            AppState.links-dialog-error = "";
+            AppState.links-dialog-open = true;
+        }
+    }
+
+    PillButton {
+        text: "Import";
+        icon: @image-url("../../assets/icons/MdiFileImport.svg");
+        clicked => { AppState.import-files(); }
+    }
+
+    PillButton {
+        text: AppState.testing ? "Testing…" : "Test";
+        icon: @image-url("../../assets/icons/MdiFlash.svg");
+        enabled: !AppState.testing && AppState.configs.length > 0;
+        clicked => { AppState.test-latency(); }
+    }
+}
+
 export component ConfigsPanel inherits VerticalLayout {
+    // Narrow (phone) layout.
+    in property <bool> compact;
+
     spacing: 8px;
 
     HorizontalLayout {
@@ -31,29 +63,11 @@ export component ConfigsPanel inherits VerticalLayout {
             }
         }
 
-        PillButton {
-            text: "Add";
-            icon: @image-url("../../assets/icons/MdiPlus.svg");
-            primary: true;
-            clicked => {
-                AppState.links-dialog-error = "";
-                AppState.links-dialog-open = true;
-            }
-        }
-
-        PillButton {
-            text: "Import";
-            icon: @image-url("../../assets/icons/MdiFileImport.svg");
-            clicked => { AppState.import-files(); }
-        }
-
-        PillButton {
-            text: AppState.testing ? "Testing…" : "Test";
-            icon: @image-url("../../assets/icons/MdiFlash.svg");
-            enabled: !AppState.testing && AppState.configs.length > 0;
-            clicked => { AppState.test-latency(); }
-        }
+        if !root.compact: Actions { }
     }
+
+    // Phone width: the buttons get their own row.
+    if root.compact: Actions { }
 
     if AppState.configs.length == 0: Text {
         vertical-stretch: 1;

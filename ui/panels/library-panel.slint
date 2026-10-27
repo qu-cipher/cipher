@@ -7,17 +7,23 @@ import { SettingsPanel } from "settings-panel.slint";
 
 // The right-hand side: subscriptions, configs, plugins and settings tabs.
 export component LibraryPanel inherits Rectangle {
+    // Show the Plugins tab (desktop only; tab values stay the same either way).
+    in property <bool> plugins: true;
+    // Narrow (phone) layout.
+    in property <bool> compact;
+
     VerticalLayout {
         padding: 12px;
         spacing: 10px;
 
         TabBar {
-            tabs: ["Subscriptions", "Configs", "Plugins", "Settings"];
+            tabs: root.plugins ? ["Subscriptions", "Configs", "Plugins", "Settings"] : ["Subscriptions", "Configs", "Settings"];
+            values: root.plugins ? [0, 1, 2, 3] : [0, 1, 3];
             current <=> AppState.current-tab;
         }
 
         if AppState.current-tab == 0: SubscriptionsPanel { vertical-stretch: 1; }
-        if AppState.current-tab == 1: ConfigsPanel { vertical-stretch: 1; }
+        if AppState.current-tab == 1: ConfigsPanel { vertical-stretch: 1; compact: root.compact; }
         if AppState.current-tab == 2: PluginsPanel { vertical-stretch: 1; }
         if AppState.current-tab == 3: SettingsPanel { vertical-stretch: 1; }
     }

@@ -19,6 +19,9 @@ cargo build / cargo run
 cargo test                    # unit tests, fixture round-trips, generator assertions
 cargo test -- --ignored       # also real `sing-box check` + `xray run -test` (XRAY_BINARY=~/Apps/v2rayN/bin/xray/xray), release download, screenshots
 CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture   # headless UI frames (*.rgba 820x520)
+CIPHER_UI=phone cargo run     # preview the phone (Android) layout on the desktop
+android/build.sh [--debug]    # Android APK (arm64) → target/android/cipher-<ver>-arm64.apk
+CIPHER_UI=phone CIPHER_SCREENSHOTS=/tmp/shots cargo test phone_screenshots -- --ignored   # phone frames (400x820)
 ```
 **Releases:** `.github/workflows/release.yml`, on a `v*` tag (must equal the Cargo.toml version) or manual run.
 It runs `cargo test --locked` and then a release build on ubuntu-22.04 + windows-latest (MSVC), and publishes a Release with
@@ -31,13 +34,16 @@ has no caps; found first because it's beside the test exe), and remove it afterw
 UI theme: all colors are tokens in `ui/theme.slint` (navy base, cyan accent matching Fluent's, per-protocol
 badge colors). Avoid gradients on rounded shapes: the software renderer drops the corner radius.
 Use `Toggle` (buttons.slint) instead of the Fluent `Switch`.
-`build.rs` compiles `ui/main-window.slint` with style `fluent-dark` and, on Windows, embeds
+`build.rs` compiles `ui/main-window.slint` (or `ui/phone-window.slint` on Android / `CIPHER_UI=phone`, setting
+`cfg(phone_ui)`; both export the same `AppWindow`, so app.rs is shared) with style `fluent-dark` and, on Windows, embeds
 `windows/app.manifest` (requireAdministrator) via `windows/app.rc`.
 
 ## Layout
 ```
 src/
-  main.rs            mod decls + slint::include_modules!(); calls app::run()
+  lib.rs             mod decls + slint::include_modules!(); main() (desktop, also --elevated-helper) and android_main
+                     (Android NativeActivity: sets paths::set_android_data_dir, slint::android::init, app::run)
+  main.rs            desktop binary: calls cipher_client::main()
   app.rs   (~1100 lines) UI glue: callbacks, threads, list refresh, connect/disconnect, settings, engines
   app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, anti-DPI, grouped
                      Configs list with a Psiphon entry; never connects: safe)
@@ -57,7 +63,8 @@ src/
   engine.rs          Engine trait (start/stop/status/ready), EngineKind, Status, EngineError, engine_for()
   engine/process.rs  child process → log file; SIGTERM then kill after 5s; stops on Drop; last log line = error msg;
                      spawn_elevated: Linux Tunnel mode via `pkexec /bin/sh` wrapper, stopped by closing its stdin pipe
-  engine/paths.rs    data_dir(), bin_dir(), find_binary() (beside exe → <data>/bin → PATH), write_private()
+  engine/paths.rs    data_dir(), bin_dir(), find_binary() (beside exe → <data>/bin → PATH; Android: lib<name>.so in the APK's
+                     native lib dir, found via /proc/self/maps), write_private()
   engine/singbox.rs  SingBoxEngine: generate → write sing-box.json → `sing-box check` → `run`; Windows proxy reset
   engine/singbox/generate.rs   build_config(profile, settings, data_dir, direct_processes) → SingBoxConfig (tags: proxy, direct, tun-in, mixed-in)
   engine/singbox/generate/routing.rs  routing rules → route rules + remote geo rule sets (SagerNet .srs via proxy) + DNS rules
@@ -79,6 +86,16 @@ src/
                      JSON lines over stdin/stdout (spawn/stop → exited), stdin EOF stops all. Only used when a plugin needs_root;
                      SingBoxEngine.elevated / Assist{elevated, direct_processes} let sing-box's TUN join it. Plain Tunnel mode is unchanged
   engine/openvpn.rs  OpenVpnEngine: --cd/--config, Inline configs → temp <data>/openvpn.ovpn (0600, removed on stop), temp auth file for auth-user-pass, ready = "Initialization Sequence Completed", AUTH_FAILED detection
+  engine/openvpn/management.rs  OpenVPN's Android management protocol (doc/android.txt): Request::parse/apply (>NEED-OK IFCONFIG/
+                     IFCONFIG6/ROUTE/ROUTE6/DNSSERVER/DNSDOMAIN → TunSpec; ROUTE "dev x" ignored; PERSIST_TUN_ACTION →
+                     OPEN_BEFORE_CLOSE), send_with_fd (SCM_RIGHTS). Compiled + unit-tested everywhere, used on Android
+  engine/openvpn/android.rs  Management: --management <data>/openvpn-management unix --management-hold; thread: connect, "hold
+                     release", answer requests, OPENTUN → android::establish → fd back with the reply
+  engine/vpn.rs      (Android) VpnEngine = engine_for(SingBox): proxy modes = plain sing-box; Tunnel = sing-box mixed inbound
+                     (generate::EXTERNAL_TUN) + VpnService TUN (172.19.0.1/30, fdfe:dcba:9876::1/126, DNS 172.19.0.2, MTU 1500)
+                     fed by tun2proxy (SOCKS5, ArgDns::Direct → sing-box hijack-dns) on its own tokio runtime
+  android.rs         (Android) JNI to MainActivity: prepare/consent/check_consent (VPN dialog), establish(TunSpec) → fd (Java owns it),
+                     revoked, stop. jni 0.22 (= Slint's), JavaVM::singleton(), activity from AndroidApp
   engine/install.rs  engine detection/versions; downloads pinned sing-box + Xray (XRAY_VERSION zip, `zip` crate) releases and pinned Psiphon binary
                      (psiphon-tunnel-core-binaries @ PSIPHON_COMMIT; SHA-256 verified) into <data>/bin
   plugin.rs          Manifest (plugin.json, deny_unknown_fields, validate(): GitHub repo, asset URLs under <repo>/releases/download/,
@@ -104,7 +121,10 @@ src/
   import/xray.rs          links needing Xray (xhttp/splithttp/kcp/mkcp, VLESS encryption) → Profile::Xray; hooked in vless/vmess/trojan
 ui/
   state.slint        AppState global: ALL Rust↔UI properties & callbacks (structs ConfigData, SubscriptionData, enum ConnectionState)
-  main-window.slint  AppWindow (820x520, frameless): TitleBar, ConnectPanel | LibraryPanel, Sheets (subscription / links / OpenVPN creds dialogs)
+  main-window.slint  AppWindow (820x520, frameless): TitleBar, ConnectPanel | LibraryPanel, Dialogs
+  phone-window.slint AppWindow for phones: header, Connect / Library screens + bottom bar, safe-area insets; no System proxy
+                     mode, no Plugins tab (TabBar `values` maps the shorter tab lists onto the same indices)
+  dialogs.slint      Dialogs: all Sheets (subscription / links / OpenVPN creds / rule / plugin dialogs) + toast, shared by both windows
   theme.slint        Theme colors (always dark)
   panels/            connect, library (tabs: subscriptions, configs, settings), configs, subscriptions, settings
   components/        buttons, config-item, group-header, rule-item, sub-item, tab-bar, title-bar, sheet
@@ -142,6 +162,23 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - **Runtime files** (`~/.local/share/cipher_client`, Windows `%APPDATA%\cipher_client`): state.json,
   sing-box.json, sing-box.log, cache.db, openvpn.log, openvpn.ovpn + openvpn-auth.txt (temporary),
   xray.json, xray.log, psiphon.json, psiphon.log, psiphon/ (its datastore), bin/, plugins/<id>/, plugin-<id>.log.
+
+## Android (in progress, see docs/android-plan.md)
+- Same crate; `target_os = "android"` gates. Slint features are per target in Cargo.toml (desktop = Slint defaults,
+  Android = `backend-android-activity-06`); `rfd` is desktop-only (Android import = TODO system picker).
+- APK: `android/build.sh` uses SDK build-tools directly (aapt2 link → add lib/arm64-v8a/*.so → zipalign -P 16 → apksigner
+  with ~/.android/debug.keystore). No Gradle: Google Maven (AGP) returns 404 from the user's network; GitHub + Maven Central work.
+  `android/AndroidManifest.xml`: package io.github.qu_cipher.cipher (`qu-cipher` isn't a valid Java identifier),
+  `.MainActivity` (extends NativeActivity, lib_name cipher_client) + `.CipherVpnService` (BIND_VPN_SERVICE), extractNativeLibs=true.
+  Java in android/java/ (javac --release 17 → d8 → classes.dex): MainActivity.vpn* methods (called from Rust), CipherVpnService
+  (establish(spec lines), excludes our own package so engines bypass the VPN, onRevoke). Engines ship as lib/arm64-v8a/lib<name>.so (sing-box pinned + sha256 in build.sh, from SagerNet's
+  android-arm64 release). Icons: android/res/mipmap-*/ic_launcher.png rendered from assets/icon.svg.
+- Rust .so: NDK r27 clang as CC/linker for `aarch64-linux-android` (API 26), `cargo rustc --lib --crate-type cdylib`.
+- OpenVPN: android/openvpn.sh cross-builds 2.7.8 + static OpenSSL 3.5.9 (sha256-pinned GitHub tarballs) via OpenVPN's CMake
+  (only CMake sets TARGET_ANDROID), empty pkg-config path, GIT_CEILING_DIRECTORIES; cached in target/android/cache.
+- connect() refuses engines other than sing-box / OpenVPN on Android.
+- Android: SystemProxy mode becomes Tunnel on load (store.rs), `AppState.bundled-engines` hides downloads / Xray / Core / Psiphon.
+  Plugin code still compiles there but is unreachable (no Plugins tab).
 
 ## Key decisions / gotchas
 - TUN uses `stack: gvisor` (the default mixed stack broke TCP behind UFW). `strict_route`, `auto_route` on.

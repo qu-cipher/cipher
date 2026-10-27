@@ -5,6 +5,12 @@
 //! ```
 //! Frames are written as raw RGBA (`*.rgba`, 820×520); convert them with
 //! `magick -size 820x520 -depth 8 rgba:file.rgba file.png`.
+//!
+//! The phone layout (`CIPHER_UI=phone`, 400×820) has its own test:
+//! `CIPHER_UI=phone CIPHER_SCREENSHOTS=/tmp/shots cargo test phone_screenshots -- --ignored`.
+
+// The phone layout's test uses fewer helpers than the desktop ones.
+#![cfg_attr(phone_ui, allow(dead_code))]
 
 use super::*;
 use slint::platform::{
@@ -14,8 +20,14 @@ use slint::platform::{
 use slint::{EventLoopError, LogicalPosition, PhysicalSize};
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
+#[cfg(not(phone_ui))]
 const WIDTH: u32 = 820;
+#[cfg(not(phone_ui))]
 const HEIGHT: u32 = 520;
+#[cfg(phone_ui)]
+const WIDTH: u32 = 400;
+#[cfg(phone_ui)]
+const HEIGHT: u32 = 820;
 
 type Queue = Arc<Mutex<Vec<Box<dyn FnOnce() + Send>>>>;
 
@@ -203,6 +215,7 @@ fn start() -> (AppWindow, Ctx, Timer, Driver) {
 
 /// The routing editor in Settings. Never connects, so it's safe to run anywhere:
 /// `CIPHER_SCREENSHOTS=<dir> cargo test routing_screenshots -- --ignored`
+#[cfg(not(phone_ui))]
 #[test]
 #[ignore = "visual check: CIPHER_SCREENSHOTS=<dir> cargo test routing_screenshots -- --ignored"]
 fn routing_screenshots() {
@@ -296,6 +309,7 @@ fn routing_screenshots() {
 
 /// The Plugins tab with installed (fake) plugins, the add review, a settings form and the
 /// transport picker. Nothing runs: the plugin programs are empty files.
+#[cfg(not(phone_ui))]
 fn plugin_frames(ui: &AppWindow, ctx: &Ctx, d: &Driver) {
     use crate::plugin::{InstallRecord, MANIFEST_FILE, binary_name, plugins_dir, save_record};
     let state = ui.global::<AppState>();
@@ -424,6 +438,7 @@ fn plugin_frames(ui: &AppWindow, ctx: &Ctx, d: &Driver) {
     d.shot("p11-core-settings");
 }
 
+#[cfg(not(phone_ui))]
 #[test]
 #[ignore = "visual check: CIPHER_SCREENSHOTS=<dir> cargo test screenshots -- --ignored"]
 fn screenshots() {
@@ -623,4 +638,43 @@ fn screenshots() {
     d.click(394.0, 60.0);
     d.pump(7000); // let the toast fade
     d.shot("16-subscriptions");
+}
+
+/// The phone layout: connect screen, library tabs, a dialog. Never connects.
+#[cfg(phone_ui)]
+#[test]
+#[ignore = "visual check: CIPHER_UI=phone CIPHER_SCREENSHOTS=<dir> cargo test phone_screenshots -- --ignored"]
+fn phone_screenshots() {
+    let (ui, _ctx, _monitor, d) = start();
+    let state = ui.global::<AppState>();
+    d.shot("p01-connect-empty");
+    d.click(200.0, 572.0); // the selected-config card: opens the Configs tab
+
+    state.invoke_add_links(
+        "trojan://pw@a.example.com:443#Trojan A\n\
+         vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443?security=tls#VLESS B with a rather long name\n\
+         hy2://pw@d.example.com:443#Hysteria D"
+            .into(),
+    );
+    d.pump(300);
+    d.shot("p02-library-configs");
+    let first = state.get_configs().iter().find(|c| !c.header).unwrap();
+    state.invoke_select_config(first.id);
+    d.click(100.0, (HEIGHT - 34) as f32); // bottom bar: Connect
+    d.shot("p03-connect-selected");
+    assert_eq!(state.get_mode(), 0);
+    d.click(300.0, 514.0); // mode: Proxy only (2nd of 2 tabs)
+    d.shot("p04-proxy-only");
+    assert_eq!(state.get_mode(), 2);
+
+    d.click(300.0, (HEIGHT - 34) as f32); // bottom bar: Library
+    state.set_current_tab(0);
+    d.shot("p05-subscriptions");
+    state.set_bundled_engines(true); // as on Android
+    state.set_current_tab(3);
+    d.shot("p06-settings");
+    state.set_current_tab(1);
+    state.set_links_dialog_open(true);
+    d.pump(300);
+    d.shot("p07-add-dialog");
 }

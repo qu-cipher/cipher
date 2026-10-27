@@ -5,7 +5,14 @@ import { PillButton, ProtocolBadge } from "../components/buttons.slint";
 import { TabBar } from "../components/tab-bar.slint";
 
 export component ConnectPanel inherits Rectangle {
-    width: 300px;
+    // The power button's diameter.
+    in property <length> size: 128px;
+    // Offer the System proxy mode (desktop only).
+    in property <bool> system-proxy: true;
+
+    // The selected-config card was clicked.
+    callback open-configs();
+
     background: Theme.panel;
 
     private property <ConnectionState> state: AppState.connection;
@@ -14,7 +21,6 @@ export component ConnectPanel inherits Rectangle {
     private property <color> tint: connected ? Theme.connected : busy ? Theme.connecting : Theme.idle;
     // The ring's color: the accent invites a click while idle.
     private property <color> ring-color: connected || busy ? tint : touch.has-hover ? Theme.accent : Theme.border-strong;
-    private property <length> size: 128px;
     // 0..1 breathing value; only ticks while busy so an idle window doesn't keep redrawing.
     private property <float> wave: busy ? (1 + sin(animation-tick() / 1.4s * 360deg)) / 2 : 0;
 
@@ -129,7 +135,9 @@ export component ConnectPanel inherits Rectangle {
         TabBar {
             height: 32px;
             font-size: 12px;
-            tabs: ["Tunnel", "System proxy", "Proxy only"];
+            // Same values as `MODES` in app.rs.
+            tabs: root.system-proxy ? ["Tunnel", "System proxy", "Proxy only"] : ["Tunnel", "Proxy only"];
+            values: root.system-proxy ? [0, 1, 2] : [0, 2];
             current <=> AppState.mode;
             enabled: !root.busy;
             changed => { AppState.mode-changed(); }
@@ -145,7 +153,7 @@ export component ConnectPanel inherits Rectangle {
 
             card-touch := TouchArea {
                 mouse-cursor: pointer;
-                clicked => { AppState.current-tab = 1; }
+                clicked => { root.open-configs(); }
             }
 
             HorizontalLayout {

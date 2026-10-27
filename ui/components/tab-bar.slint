@@ -3,6 +3,9 @@ import { Theme } from "../theme.slint";
 export component TabBar inherits Rectangle {
     in property <[string]> tabs;
     in-out property <int> current;
+    // What each tab sets `current` to; empty = its index. Lets a shorter tab list (phone) map onto
+    // the same values as the full one.
+    in property <[int]> values;
     in property <bool> enabled: true;
     in property <length> font-size: 13px;
 
@@ -21,26 +24,28 @@ export component TabBar inherits Rectangle {
         spacing: 3px;
 
         for tab[i] in root.tabs: Rectangle {
+            property <int> value: root.values.length > i ? root.values[i] : i;
+
             border-radius: 8px;
-            background: i == root.current ? Theme.surface-hover : touch.has-hover ? Theme.surface-raised : transparent;
-            border-width: i == root.current ? 1px : 0px;
+            background: self.value == root.current ? Theme.surface-hover : touch.has-hover ? Theme.surface-raised : transparent;
+            border-width: self.value == root.current ? 1px : 0px;
             border-color: Theme.border-strong;
             animate background { duration: 120ms; }
 
             Text {
                 text: tab;
                 font-size: root.font-size;
-                font-weight: i == root.current ? 600 : 400;
-                color: i == root.current ? Theme.text : Theme.text-muted;
+                font-weight: parent.value == root.current ? 600 : 400;
+                color: parent.value == root.current ? Theme.text : Theme.text-muted;
             }
 
             touch := TouchArea {
                 enabled: root.enabled;
                 mouse-cursor: root.enabled ? pointer : default;
                 clicked => {
-                    if i != root.current {
-                        root.current = i;
-                        root.changed(i);
+                    if parent.value != root.current {
+                        root.current = parent.value;
+                        root.changed(parent.value);
                     }
                 }
             }

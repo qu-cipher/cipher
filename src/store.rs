@@ -94,6 +94,11 @@ impl Store {
             let name = "Psiphon (imported config)".into();
             self.add_profiles(vec![Profile::Psiphon { name, source: PsiphonSource::Network(network) }]);
         }
+        // Android has no system proxy setting to change.
+        #[cfg(target_os = "android")]
+        if self.settings.mode == crate::profile::ConnectionMode::SystemProxy {
+            self.settings.mode = crate::profile::ConnectionMode::Tunnel;
+        }
         self.forget_missing_selection();
         self
     }

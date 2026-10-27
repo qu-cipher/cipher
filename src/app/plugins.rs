@@ -230,6 +230,11 @@ fn review_with(ui: &AppWindow, ctx: &Ctx, review: impl FnOnce() -> Result<instal
     });
 }
 
+// No plugins on Android (the Plugins tab is hidden there).
+#[cfg(target_os = "android")]
+fn pick_plugin_file(_ui: &AppWindow, _ctx: &Ctx) {}
+
+#[cfg(not(target_os = "android"))]
 fn pick_plugin_file(ui: &AppWindow, ctx: &Ctx) {
     let weak = ui.as_weak();
     let ctx = ctx.clone();
@@ -493,7 +498,7 @@ fn set_transport(ui: &AppWindow, ctx: &Ctx, id: u64, transport: Option<Transport
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(phone_ui)))]
 pub(super) fn plugin_data_for_tests(manifest: &Manifest) -> PluginData {
     plugin_data(manifest, false, false, false)
 }

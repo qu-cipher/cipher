@@ -1,0 +1,547 @@
+import { CheckBox, ComboBox, LineEdit, ScrollView, TextEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppState } from "state.slint";
+import { PillButton, ProtocolBadge, Toggle } from "./components/buttons.slint";
+import { Sheet } from "./components/sheet.slint";
+
+// The dialogs (sheets) and the toast, over the whole window. Shared by the desktop and phone windows.
+export component Dialogs inherits Rectangle {
+    // Space to keep free above (title bar) and below (on-screen keyboard, navigation bar).
+    in property <length> top;
+    in property <length> bottom;
+    // The toast also keeps clear of a bottom bar.
+    in property <length> toast-bottom: root.bottom;
+
+    // Focus the text field when a dialog opens.
+    private property <bool> sub-open: AppState.sub-dialog-open;
+    private property <bool> links-open: AppState.links-dialog-open;
+    private property <bool> creds-open: AppState.creds-dialog-open;
+    private property <bool> rule-open: AppState.rule-dialog-open;
+    changed rule-open => { if self.rule-open { rule-input.focus(); } }
+    changed sub-open => { if self.sub-open { url-input.focus(); } }
+    changed links-open => { if self.links-open { links-input.focus(); } }
+    changed creds-open => { if self.creds-open { username-input.focus(); } }
+
+    // ── Add subscription ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.sub-dialog-open;
+        title: "Add subscription";
+        sheet-height: AppState.sub-dialog-error != "" ? 178px : 150px;
+        dismiss => {
+            if !AppState.sub-dialog-busy { AppState.sub-dialog-open = false; }
+        }
+
+        url-input := LineEdit {
+            placeholder-text: "https://…";
+            enabled: !AppState.sub-dialog-busy;
+            text <=> AppState.sub-dialog-url;
+            accepted => { AppState.add-subscription(self.text); }
+        }
+
+        if AppState.sub-dialog-error != "": Text {
+            text: AppState.sub-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                enabled: !AppState.sub-dialog-busy;
+                clicked => { AppState.sub-dialog-open = false; }
+            }
+
+            PillButton {
+                text: AppState.sub-dialog-busy ? "Fetching…" : "Add";
+                primary: true;
+                enabled: !AppState.sub-dialog-busy && AppState.sub-dialog-url != "";
+                clicked => { AppState.add-subscription(AppState.sub-dialog-url); }
+            }
+        }
+    }
+
+    // ── Add configs from share links ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.links-dialog-open;
+        title: "Add configs";
+        sheet-height: 270px;
+        dismiss => { AppState.links-dialog-open = false; }
+
+        Text {
+            text: "Paste vless://, vmess://, trojan://, ss://, hy2://, tuic://, anytls:// or wireguard:// links, one per line.";
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        links-input := TextEdit {
+            vertical-stretch: 1;
+            font-size: 12px;
+            wrap: char-wrap;
+            text <=> AppState.links-dialog-text;
+        }
+
+        if AppState.links-dialog-error != "": Text {
+            text: AppState.links-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.links-dialog-open = false; }
+            }
+
+            PillButton {
+                text: "Add";
+                primary: true;
+                enabled: AppState.links-dialog-text != "";
+                clicked => { AppState.add-links(AppState.links-dialog-text); }
+            }
+        }
+    }
+
+    // ── OpenVPN sign-in ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.creds-dialog-open;
+        title: AppState.creds-dialog-title;
+        sheet-height: AppState.creds-dialog-error != "" ? 240px : 214px;
+        dismiss => { AppState.creds-dialog-open = false; }
+
+        Text {
+            text: "This OpenVPN config asks for a username and password. They're saved with your configs.";
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        username-input := LineEdit {
+            placeholder-text: "Username";
+            text <=> AppState.creds-username;
+            accepted => { password-input.focus(); }
+        }
+
+        password-input := LineEdit {
+            placeholder-text: "Password";
+            input-type: password;
+            text <=> AppState.creds-password;
+            accepted => { AppState.submit-credentials(); }
+        }
+
+        if AppState.creds-dialog-error != "": Text {
+            text: AppState.creds-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.creds-dialog-open = false; }
+            }
+
+            PillButton {
+                text: AppState.creds-dialog-action;
+                primary: true;
+                enabled: AppState.creds-username != "";
+                clicked => { AppState.submit-credentials(); }
+            }
+        }
+    }
+
+    // ── Routing rule editor ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.rule-dialog-open;
+        title: AppState.rule-dialog-index < 0 ? "Add rule" : "Edit rule";
+        sheet-height: AppState.rule-dialog-error != "" ? 300px : 276px;
+        dismiss => { AppState.rule-dialog-open = false; }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            ComboBox {
+                horizontal-stretch: 1;
+                model: AppState.rule-kinds;
+                current-index <=> AppState.rule-dialog-kind;
+            }
+
+            Text {
+                text: "→";
+                vertical-alignment: center;
+                color: Theme.text-muted;
+            }
+
+            ComboBox {
+                horizontal-stretch: 1;
+                model: AppState.rule-targets;
+                current-index <=> AppState.rule-dialog-target;
+            }
+        }
+
+        Text {
+            // Same order as `rule-kinds`.
+            text: [
+                "Domains, one per line or comma-separated. Subdomains match too: example.com, google.com",
+                "Words anywhere in a domain: google, telegram",
+                "IP addresses or CIDR ranges: 1.1.1.1, 10.0.0.0/8, 2001:db8::/32",
+                "Destination ports or ranges: 443, 6881:6889",
+                "Process names or full paths: firefox, chrome.exe, /usr/bin/telegram-desktop",
+                "Geosite lists (sing-geosite names): category-ir, google, netflix",
+                "GeoIP country codes: ir, cn, ru",
+            ][AppState.rule-dialog-kind];
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        rule-input := TextEdit {
+            vertical-stretch: 1;
+            font-size: 12px;
+            wrap: char-wrap;
+            text <=> AppState.rule-dialog-values;
+        }
+
+        if AppState.rule-dialog-error != "": Text {
+            text: AppState.rule-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.rule-dialog-open = false; }
+            }
+
+            PillButton {
+                text: "Save";
+                primary: true;
+                enabled: AppState.rule-dialog-values != "";
+                clicked => { AppState.save-rule(); }
+            }
+        }
+    }
+
+    // ── Add plugin: the source, then a review with the warnings ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.plugin-dialog-open;
+        title: AppState.plugin-review-ready ? "Add " + AppState.plugin-review.name + "?" : "Add plugin";
+        sheet-height: AppState.plugin-review-ready ? 430px : (AppState.plugin-dialog-error != "" ? 214px : 186px);
+        dismiss => {
+            if !AppState.plugin-dialog-busy { AppState.plugin-dialog-open = false; }
+        }
+
+        if !AppState.plugin-review-ready: Text {
+            text: "A plugin link (plugin.json), a GitHub repository with a plugin.json, or a local plugin.json.";
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        if !AppState.plugin-review-ready: HorizontalLayout {
+            spacing: 8px;
+
+            LineEdit {
+                horizontal-stretch: 1;
+                placeholder-text: "https://github.com/owner/repo";
+                enabled: !AppState.plugin-dialog-busy;
+                text <=> AppState.plugin-dialog-source;
+                accepted => { AppState.review-plugin(self.text); }
+            }
+
+            PillButton {
+                text: "Browse…";
+                enabled: !AppState.plugin-dialog-busy;
+                clicked => { AppState.pick-plugin-file(); }
+            }
+        }
+
+        if AppState.plugin-review-ready: ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 8px;
+                padding-right: 8px;
+                alignment: start;
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    ProtocolBadge { protocol: AppState.plugin-review.kind == "Engine" ? "engine" : AppState.plugin-review.kind == "Core" ? "core" : "transport"; }
+                    if AppState.plugin-review.official: ProtocolBadge { protocol: "official"; }
+                    if AppState.plugin-review.development: ProtocolBadge { protocol: "development"; }
+                    if AppState.plugin-review.root: ProtocolBadge { protocol: "admin"; }
+                }
+
+                Text {
+                    text: "Version " + AppState.plugin-review.version + " · License " + AppState.plugin-review.license
+                        + "\nSource: " + AppState.plugin-review.repository
+                        + (AppState.plugin-review.development ? "" : "\nChecksum: verified when downloading · Build provenance: not checked");
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                if AppState.plugin-review.description != "": Text {
+                    text: AppState.plugin-review.description;
+                    font-size: 12px;
+                    color: Theme.text-muted;
+                    wrap: word-wrap;
+                }
+
+                for warning in AppState.plugin-review-warnings: Text {
+                    text: "⚠ " + warning;
+                    font-size: 11px;
+                    color: Theme.connecting;
+                    wrap: word-wrap;
+                }
+
+                Rectangle {
+                    border-radius: 10px;
+                    background: Theme.danger-surface;
+                    border-width: 1px;
+                    border-color: Theme.danger.transparentize(60%);
+                    height: warning-text.preferred-height + 20px;
+
+                    warning-text := Text {
+                        x: 10px;
+                        width: parent.width - 20px;
+                        text: "Only add plugins from sources you trust. A plugin is a program that runs on your computer and can see all traffic that goes through it. A malicious plugin can steal your data or take over your system. The app checks that the file matches its published source, not that the source is safe.";
+                        font-size: 11px;
+                        color: Theme.danger-text;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if AppState.plugin-review.root: CheckBox {
+                    text: "Allow administrator rights (full control over this computer while connected)";
+                    checked <=> AppState.plugin-review-allow-root;
+                }
+            }
+        }
+
+        if AppState.plugin-dialog-error != "": Text {
+            text: AppState.plugin-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: AppState.plugin-review-ready ? "Back" : "Cancel";
+                enabled: !AppState.plugin-dialog-busy;
+                clicked => {
+                    if AppState.plugin-review-ready {
+                        AppState.review-plugin("");
+                    } else {
+                        AppState.plugin-dialog-open = false;
+                    }
+                }
+            }
+
+            if !AppState.plugin-review-ready: PillButton {
+                text: AppState.plugin-dialog-busy ? "Checking…" : "Check";
+                primary: true;
+                enabled: !AppState.plugin-dialog-busy && AppState.plugin-dialog-source != "";
+                clicked => { AppState.review-plugin(AppState.plugin-dialog-source); }
+            }
+
+            if AppState.plugin-review-ready: PillButton {
+                text: AppState.plugin-dialog-busy ? "Installing…" : "Install";
+                primary: true;
+                enabled: !AppState.plugin-dialog-busy;
+                clicked => { AppState.install-plugin(); }
+            }
+        }
+    }
+
+    // ── Allow a plugin's administrator rights later ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.plugin-root-dialog-id != "";
+        title: "Allow administrator rights?";
+        sheet-height: 150px;
+        dismiss => { AppState.plugin-root-dialog-id = ""; }
+
+        Text {
+            text: AppState.plugin-root-dialog-name + " asks for administrator rights. It will have full control over this computer while connected. Only allow this for plugins from sources you trust.";
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.plugin-root-dialog-id = ""; }
+            }
+
+            PillButton {
+                text: "Allow";
+                danger: true;
+                clicked => { AppState.allow-plugin-root(AppState.plugin-root-dialog-id); }
+            }
+        }
+    }
+
+    // ── A plugin's settings: a transport for a config, or a new engine-plugin config ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.fields-dialog-open;
+        title: AppState.fields-dialog-title;
+        sheet-height: 380px;
+        dismiss => { AppState.cancel-fields(); }
+
+        ScrollView {
+            vertical-stretch: 1;
+
+            VerticalLayout {
+                spacing: 8px;
+                padding-right: 8px;
+                alignment: start;
+
+                if AppState.fields-dialog-needs-name: VerticalLayout {
+                    spacing: 4px;
+                    Text { text: "Name"; font-size: 12px; }
+                    LineEdit {
+                        placeholder-text: "My server";
+                        text <=> AppState.fields-dialog-name;
+                    }
+                }
+
+                for field[i] in AppState.fields-dialog-fields: VerticalLayout {
+                    spacing: 4px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            horizontal-stretch: 1;
+                            text: field.label + (field.required ? " *" : "");
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+
+                        if field.kind == "bool": Toggle {
+                            checked: field.value == "true";
+                            toggled => { AppState.edit-field(i, self.checked ? "true" : "false"); }
+                        }
+                    }
+
+                    if field.kind == "text" || field.kind == "number": LineEdit {
+                        text: field.value;
+                        input-type: field.kind == "number" ? InputType.decimal : InputType.text;
+                        edited(text) => { AppState.edit-field(i, text); }
+                    }
+
+                    if field.kind == "lines": TextEdit {
+                        height: 96px;
+                        text: field.value;
+                        wrap: no-wrap;
+                        font-size: 12px;
+                        edited(text) => { AppState.edit-field(i, text); }
+                    }
+
+                    if field.kind == "select": ComboBox {
+                        model: field.options;
+                        current-value: field.value;
+                        selected(value) => { AppState.edit-field(i, value); }
+                    }
+
+                    if field.hint != "": Text {
+                        text: field.hint;
+                        font-size: 10px;
+                        color: Theme.text-muted;
+                        wrap: word-wrap;
+                    }
+                }
+
+                if AppState.fields-dialog-fields.length == 0 && !AppState.fields-dialog-needs-name: Text {
+                    text: "This plugin has no settings.";
+                    font-size: 12px;
+                    color: Theme.text-muted;
+                }
+            }
+        }
+
+        if AppState.fields-dialog-error != "": Text {
+            text: AppState.fields-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.cancel-fields(); }
+            }
+
+            PillButton {
+                text: "Save";
+                primary: true;
+                clicked => { AppState.save-fields(); }
+            }
+        }
+    }
+
+    // ── Toast ──
+    Rectangle {
+        x: (root.width - self.width) / 2;
+        y: root.height - root.toast-bottom - self.height - 18px;
+        width: min(toast-text.preferred-width + 32px, root.width - 64px);
+        height: max(34px, toast-text.preferred-height + 16px);
+        border-radius: 12px;
+        background: AppState.notice-is-error ? Theme.danger-surface : Theme.surface-hover;
+        border-width: 1px;
+        border-color: AppState.notice-is-error ? Theme.danger.transparentize(50%) : Theme.border-strong;
+        opacity: AppState.notice != "" ? 1 : 0;
+        animate opacity { duration: 180ms; }
+
+        toast-text := Text {
+            width: min(self.preferred-width, root.width - 96px);
+            text: AppState.notice;
+            font-size: 12px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            color: AppState.notice-is-error ? Theme.danger-text : Theme.text;
+        }
+    }
+}

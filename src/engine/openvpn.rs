@@ -3,6 +3,11 @@ use crate::import::openvpn::config_needs_credentials;
 use crate::profile::{OpenVpnConfig, Profile, Settings};
 use std::{ffi::OsStr, fs, path::PathBuf};
 
+#[cfg(target_os = "android")]
+mod android;
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub mod management;
+
 const BINARY: &str = "openvpn";
 
 /// `Status::Failed` reason when the server rejected the username/password.
@@ -16,6 +21,9 @@ pub struct OpenVpnEngine {
     auth_file: Option<PathBuf>,
     /// An inline config written out for this run; deleted on stop.
     temp_config: Option<PathBuf>,
+    /// Android: OpenVPN asks us for its TUN over the management socket.
+    #[cfg(target_os = "android")]
+    management: Option<android::Management>,
 }
 
 impl Engine for OpenVpnEngine {
@@ -70,13 +78,29 @@ impl Engine for OpenVpnEngine {
             self.auth_file = Some(auth_file);
         }
 
+        #[cfg(target_os = "android")]
+        let socket = data_dir.join("openvpn-management");
+        #[cfg(target_os = "android")]
+        {
+            let _ = fs::remove_file(&socket);
+            args.extend(android::Management::args(&socket));
+        }
+
         // OpenVPN is Tunnel-only, so it always runs as admin.
         self.process = Some(Process::spawn_elevated("openvpn", &binary, args, &data_dir.join("openvpn.log"))?);
+        #[cfg(target_os = "android")]
+        {
+            self.management = Some(android::Management::start(socket));
+        }
         Ok(())
     }
 
     fn stop(&mut self) -> Result<(), EngineError> {
         let result = self.process.take().map_or(Ok(()), |mut process| process.stop());
+        #[cfg(target_os = "android")]
+        if let Some(mut management) = self.management.take() {
+            management.stop();
+        }
         for file in [self.auth_file.take(), self.temp_config.take()].into_iter().flatten() {
             let _ = fs::remove_file(file);
         }
@@ -84,6 +108,15 @@ impl Engine for OpenVpnEngine {
     }
 
     fn status(&mut self) -> Status {
+        #[cfg(target_os = "android")]
+        if let Some(management) = &self.management {
+            if let Some(reason) = management.failed() {
+                return Status::Failed(reason);
+            }
+            if crate::android::revoked() {
+                return Status::Failed("Android turned the VPN off (another VPN app, or system settings)".into());
+            }
+        }
         let Some(process) = self.process.as_mut() else { return Status::Stopped };
         match process.status() {
             Status::Failed(_) if process.log_contains("AUTH_FAILED") => Status::Failed(AUTH_FAILED.into()),
@@ -96,6 +129,10 @@ impl Engine for OpenVpnEngine {
     }
 
     fn authorized(&mut self) -> bool {
+        #[cfg(target_os = "android")]
+        if let Some(management) = &mut self.management {
+            return management.authorized();
+        }
         self.process.as_ref().is_some_and(Process::authorized)
     }
 }
@@ -118,7 +155,8 @@ mod tests {
         let log = std::env::temp_dir().join("cipher_client_auth_failed.log");
         let script = "echo 'AUTH: Received control message: AUTH_FAILED'; echo 'SIGTERM[soft,auth-failure] received, process exiting'";
         let process = Process::spawn("openvpn", "/bin/sh".as_ref(), ["-c", script], &log).unwrap();
-        let mut engine = OpenVpnEngine { process: Some(process), auth_file: None, temp_config: None };
+        let mut engine = OpenVpnEngine::default();
+        engine.process = Some(process);
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while engine.status() == Status::Running && std::time::Instant::now() < deadline {

@@ -6,6 +6,8 @@ pub mod install;
 pub mod paths;
 pub mod process;
 pub mod singbox;
+#[cfg(target_os = "android")]
+pub mod vpn;
 pub mod openvpn;
 pub mod plugin;
 pub mod psiphon;
@@ -113,6 +115,10 @@ pub fn kind_for(profile: &Profile, settings: &Settings) -> EngineKind {
 
 pub fn engine_for(kind: EngineKind) -> Box<dyn Engine + Send> {
     match kind {
+        // Android: Tunnel mode through the app's VpnService.
+        #[cfg(target_os = "android")]
+        EngineKind::SingBox => Box::new(vpn::VpnEngine::default()),
+        #[cfg(not(target_os = "android"))]
         EngineKind::SingBox => Box::new(singbox::SingBoxEngine::default()),
         EngineKind::OpenVpn => Box::new(openvpn::OpenVpnEngine::default()),
         EngineKind::Psiphon => Box::new(psiphon::PsiphonEngine::default()),

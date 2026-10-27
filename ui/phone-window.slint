@@ -1,0 +1,195 @@
+import "../assets/Geist.ttf";
+import { Theme } from "theme.slint";
+import { AppState, ConnectionState, ConfigData, EngineData, FieldData, PluginData, PresetData, RuleData, SubscriptionData } from "state.slint";
+import { ConnectPanel } from "./panels/connect-panel.slint";
+import { LibraryPanel } from "./panels/library-panel.slint";
+import { Dialogs } from "dialogs.slint";
+
+// Rust needs these to talk to the UI.
+export { AppState, ConnectionState, ConfigData, EngineData, FieldData, PluginData, PresetData, RuleData, SubscriptionData }
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> active;
+
+    callback clicked();
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+
+        HorizontalLayout {
+            alignment: center;
+
+            // The active item's pill behind the icon.
+            Rectangle {
+                width: 56px;
+                height: 30px;
+                border-radius: self.height / 2;
+                background: root.active ? Theme.selected : transparent;
+                animate background { duration: 150ms; }
+
+                Image {
+                    source: root.icon;
+                    width: 20px;
+                    height: 20px;
+                    colorize: root.active ? Theme.accent : Theme.text-muted;
+                }
+            }
+        }
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-weight: root.active ? 600 : 400;
+            horizontal-alignment: center;
+            color: root.active ? Theme.text : Theme.text-muted;
+        }
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// The phone layout (Android): the connect screen and the library as two screens with a bottom bar.
+// Same name, properties and callbacks as the desktop `AppWindow`, so app.rs drives either one.
+export component AppWindow inherits Window {
+    title: "Cipher VPN Client";
+    icon: @image-url("../assets/icon.svg");
+    // Only for previewing on a desktop; on a phone the window fills the screen.
+    preferred-width: 400px;
+    preferred-height: 820px;
+    default-font-family: "Geist";
+    background: Theme.background;
+
+    // Desktop title-bar actions; nothing calls them here.
+    callback minimize_window();
+    callback close_window();
+
+    // 0 = connect, 1 = library.
+    private property <int> screen: 0;
+    // Anything that picks a library tab (the selected-config card, a hint pointing at Settings)
+    // shows the library.
+    private property <int> tab: AppState.current-tab;
+    changed tab => { root.screen = 1; }
+
+    private property <ConnectionState> state: AppState.connection;
+    private property <bool> connected: state == ConnectionState.connected;
+    private property <bool> busy: state == ConnectionState.connecting || state == ConnectionState.disconnecting;
+
+    VerticalLayout {
+        padding-top: root.safe-area-insets.top;
+        padding-left: root.safe-area-insets.left;
+        padding-right: root.safe-area-insets.right;
+
+        // ── Header ──
+        Rectangle {
+            height: 52px;
+            background: root.screen == 0 ? Theme.panel : Theme.background;
+
+            HorizontalLayout {
+                padding-left: 18px;
+                padding-right: 18px;
+                spacing: 10px;
+                // The app name sits in the middle; the library's title is on the left, its status on the right.
+                alignment: root.screen == 0 ? LayoutAlignment.center : LayoutAlignment.stretch;
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 12px;
+                        height: 12px;
+                        border-radius: 4px;
+                        background: Theme.accent;
+                    }
+                }
+
+                Text {
+                    text: root.screen == 0 ? "Cipher" : "Library";
+                    font-size: 18px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                }
+
+                if root.screen == 1: Rectangle { horizontal-stretch: 1; }
+
+                // The connection state, so it stays visible on the library screen.
+                if root.screen == 1: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: end;
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: root.connected ? Theme.connected : root.busy ? Theme.connecting : Theme.idle;
+                        }
+                    }
+
+                    Text {
+                        text: root.connected ? "Connected" : root.busy ? "Working…" : "Disconnected";
+                        font-size: 12px;
+                        vertical-alignment: center;
+                        color: root.connected ? Theme.connected : root.busy ? Theme.connecting : Theme.text-muted;
+                    }
+                }
+            }
+        }
+
+        if root.screen == 0: ConnectPanel {
+            vertical-stretch: 1;
+            size: 168px;
+            system-proxy: false;
+            open-configs => {
+                AppState.current-tab = 1;
+                root.screen = 1;
+            }
+        }
+
+        if root.screen == 1: LibraryPanel {
+            vertical-stretch: 1;
+            plugins: false;
+            compact: true;
+        }
+
+        // ── Bottom bar ──
+        Rectangle {
+            height: 68px + root.safe-area-insets.bottom;
+            background: Theme.panel;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.border;
+            }
+
+            HorizontalLayout {
+                padding-bottom: root.safe-area-insets.bottom;
+
+                NavItem {
+                    label: "Connect";
+                    icon: @image-url("../assets/icons/MdiPowerStandby.svg");
+                    active: root.screen == 0;
+                    clicked => { root.screen = 0; }
+                }
+
+                NavItem {
+                    label: "Library";
+                    icon: @image-url("../assets/icons/MdiFormatListGroup.svg");
+                    active: root.screen == 1;
+                    clicked => { root.screen = 1; }
+                }
+            }
+        }
+    }
+
+    Dialogs {
+        top: root.safe-area-insets.top;
+        bottom: max(root.safe-area-insets.bottom, root.virtual-keyboard-size.height);
+        toast-bottom: max(root.safe-area-insets.bottom + 68px, root.virtual-keyboard-size.height);
+    }
+}

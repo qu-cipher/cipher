@@ -91,6 +91,7 @@ type Ctx = Arc<Shared>;
 pub fn run() -> Result<(), Box<dyn Error>> {
     let ui = AppWindow::new()?;
     // Matches cipher_client.desktop, so the shell shows the launcher icon for this window.
+    #[cfg(not(target_os = "android"))]
     slint::set_xdg_app_id("cipher_client")?;
     let (ctx, _monitor) = init(&ui);
 
@@ -519,6 +520,13 @@ fn add_links(ui: &AppWindow, ctx: &Ctx, text: &str) {
     notify(ui, ctx, summary("Added", added, &parsed.skipped), !parsed.skipped.is_empty());
 }
 
+// TODO(android): the system file picker, through the Java side.
+#[cfg(target_os = "android")]
+fn import_files(ui: &AppWindow, ctx: &Ctx) {
+    notify(ui, ctx, "Importing files isn't available on Android yet. Use Add to paste links.", true);
+}
+
+#[cfg(not(target_os = "android"))]
 fn import_files(ui: &AppWindow, ctx: &Ctx) {
     let weak = ui.as_weak();
     let ctx = ctx.clone();
@@ -562,6 +570,8 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
     });
 }
 
+// Unused on Android until it gets a file picker.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn import_file(path: &Path) -> Result<Vec<Profile>, ImportError> {
     let extension = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
     match extension.as_deref() {
@@ -885,6 +895,13 @@ fn connect(ui: &AppWindow, ctx: &Ctx) {
     let profile = xray::effective(&profile, &settings).into_owned();
     let kind = engine::kind_for(&profile, &settings);
 
+    // Android ships sing-box and OpenVPN only.
+    #[cfg(target_os = "android")]
+    if !matches!(kind, engine::EngineKind::SingBox | engine::EngineKind::OpenVpn) {
+        ui.global::<AppState>().set_error("This config needs an engine the Android build doesn't have.".into());
+        return;
+    }
+
     ctx.cancel.store(false, Ordering::Relaxed);
     ui.global::<AppState>().set_error(SharedString::new());
     set_state(ui, ctx, ConnectionState::Connecting);
@@ -1044,6 +1061,7 @@ fn monitor_tick(ui: &AppWindow, ctx: &Ctx) {
 fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     let state = ui.global::<AppState>();
     let settings = ctx.store.lock().unwrap().settings.clone();
+    state.set_bundled_engines(cfg!(target_os = "android"));
 
     let level = LOG_LEVELS.iter().position(|l| *l == settings.log_level).unwrap_or(1);
     state.set_log_level(level as i32);

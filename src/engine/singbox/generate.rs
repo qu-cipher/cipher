@@ -99,10 +99,14 @@ pub fn build_config(
     })
 }
 
+/// Android: the TUN belongs to the app's VpnService, which feeds it into the mixed inbound
+/// (engine::vpn). sing-box itself has no TUN there, but keeps the tunnel's DNS and routing rules.
+const EXTERNAL_TUN: bool = cfg!(target_os = "android");
+
 fn inbounds(settings: &Settings) -> Vec<Inbound> {
     let mut inbounds = Vec::new();
 
-    if settings.mode.uses_tunnel() {
+    if settings.mode.uses_tunnel() && !EXTERNAL_TUN {
         inbounds.push(Inbound::Tun(TunInbound {
             tag: Some(TUN_TAG.into()),
             address: Some(TUN_ADDRESS.map(String::from).to_vec()),
@@ -114,7 +118,7 @@ fn inbounds(settings: &Settings) -> Vec<Inbound> {
         }));
     }
 
-    if settings.serves_proxy() {
+    if settings.serves_proxy() || (settings.mode.uses_tunnel() && EXTERNAL_TUN) {
         inbounds.push(Inbound::Mixed(MixedInbound {
             tag: Some(MIXED_TAG.into()),
             listen: ListenOptions {
@@ -165,7 +169,8 @@ fn route(settings: &Settings, direct_processes: &[String], routing_rules: Vec<Ro
         ..Default::default()
     }];
 
-    // Only the TUN captures raw DNS packets; proxy clients send domain names.
+    // Only the TUN captures raw DNS packets; proxy clients send domain names. (On Android they
+    // arrive from the VpnService TUN through the mixed inbound, as UDP to the TUN's DNS address.)
     if tunnel {
         rules.push(RouteRule {
             protocol: Some(vec!["dns".into()]),
@@ -205,7 +210,8 @@ fn route(settings: &Settings, direct_processes: &[String], routing_rules: Vec<Ro
         rule_set,
         final_outbound: Some(final_outbound.into()),
         // Keeps the proxy's own connections off the TUN (routing loops). Not needed without one.
-        auto_detect_interface: tunnel.then_some(true),
+        // Android: the app is excluded from its own VPN, so there's no loop.
+        auto_detect_interface: (tunnel && !EXTERNAL_TUN).then_some(true),
         default_domain_resolver: Some(DomainResolver::Tag(DNS_LOCAL_TAG.into())),
         ..Default::default()
     }
