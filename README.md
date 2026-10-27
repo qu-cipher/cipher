@@ -261,6 +261,7 @@ Linux `~/.local/share/cipher_client/`, Windows `%APPDATA%\cipher_client\`:
 - **[MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN)** by Amin Mahmoudi (masterking32), MIT License,
   Copyright (c) 2026 Amin Mahmoudi. The official plugin (`plugins/masterdnsvpn.json`) downloads its released
   client and fills in its client config and resolver list; MasterDnsVPN itself isn't part of this repository.
+  Its license text: [plugins/MasterDnsVPN-LICENSE](plugins/MasterDnsVPN-LICENSE).
 - Engines run as separate programs, each under its own license: [sing-box](https://github.com/SagerNet/sing-box)
   (GPL-3.0-or-later), [Xray-core](https://github.com/XTLS/Xray-core) (MPL-2.0),
   [OpenVPN](https://github.com/OpenVPN/openvpn) (GPL-2.0, built with [OpenSSL](https://github.com/openssl/openssl),
