@@ -5,8 +5,11 @@
 #   android/build.sh --debug    faster, unoptimized library
 #
 # Needs: ANDROID_HOME (platform 36, build-tools 36, an NDK), the aarch64-linux-android Rust target,
-# a JDK (javac, keytool), python3, curl. Output: target/android/cipher-<version>-arm64.apk, signed with the
-# debug key (~/.android/debug.keystore, created if missing).
+# a JDK (javac, keytool), python3, curl. Output: target/android/cipher-<version>-arm64.apk.
+#
+# Signing: a release key when ANDROID_KEYSTORE is set (with ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS
+# and optionally ANDROID_KEY_PASSWORD), else the debug key (~/.android/debug.keystore, created if
+# missing). Android only installs an update signed with the same key as the installed app.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -93,15 +96,31 @@ with zipfile.ZipFile(apk, "a", zipfile.ZIP_DEFLATED) as z:
 EOF
 "$BUILD_TOOLS/zipalign" -f -P 16 4 "$WORK/unaligned.apk" "$WORK/aligned.apk"
 
-KEYSTORE=$HOME/.android/debug.keystore
-if [[ ! -f $KEYSTORE ]]; then
-    mkdir -p "$(dirname "$KEYSTORE")"
-    keytool -genkeypair -keystore "$KEYSTORE" -storepass android -keypass android -alias androiddebugkey \
-        -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+# Passwords go through the environment, not the command line.
+if [[ -n ${ANDROID_KEYSTORE:-} ]]; then
+    echo "==> signing with the release key"
+    KEYSTORE=$ANDROID_KEYSTORE
+    KEY_ALIAS=${ANDROID_KEY_ALIAS:?set ANDROID_KEY_ALIAS}
+    export CIPHER_KS_PASS=${ANDROID_KEYSTORE_PASSWORD:?set ANDROID_KEYSTORE_PASSWORD}
+    export CIPHER_KEY_PASS=${ANDROID_KEY_PASSWORD:-$CIPHER_KS_PASS}
+else
+    echo "==> signing with the debug key"
+    KEYSTORE=$HOME/.android/debug.keystore
+    KEY_ALIAS=androiddebugkey
+    export CIPHER_KS_PASS=android CIPHER_KEY_PASS=android
+    if [[ ! -f $KEYSTORE ]]; then
+        mkdir -p "$(dirname "$KEYSTORE")"
+        keytool -genkeypair -keystore "$KEYSTORE" -storepass android -keypass android -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+    fi
 fi
+# JDK 22+ warns about apksigner's native crypto unless allowed; older JDKs don't know the flag.
+JAVA_FLAGS=()
+java_major=$(java -version 2>&1 | sed -nE '1s/.*version "([0-9]+).*/\1/p')
+(( ${java_major:-0} >= 22 )) && JAVA_FLAGS=(-J-enable-native-access=ALL-UNNAMED)
 APK=$OUT/cipher-$VERSION-arm64.apk
-# (-J…: quiets a JDK 24+ warning about apksigner's native crypto)
-"$BUILD_TOOLS/apksigner" -J-enable-native-access=ALL-UNNAMED sign --ks "$KEYSTORE" --ks-pass pass:android --key-pass pass:android \
+"$BUILD_TOOLS/apksigner" "${JAVA_FLAGS[@]}" sign --ks "$KEYSTORE" --ks-key-alias "$KEY_ALIAS" \
+    --ks-pass env:CIPHER_KS_PASS --key-pass env:CIPHER_KEY_PASS \
     --min-sdk-version $MIN_SDK --out "$APK" "$WORK/aligned.apk"
-"$BUILD_TOOLS/apksigner" -J-enable-native-access=ALL-UNNAMED verify "$APK"
+"$BUILD_TOOLS/apksigner" "${JAVA_FLAGS[@]}" verify "$APK"
 echo "==> $APK ($(du -h "$APK" | cut -f1))"

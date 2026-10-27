@@ -1,6 +1,6 @@
 # Cipher VPN Client
 
-A small desktop VPN client for **Linux** and **Windows**, written in Rust with a [Slint](https://slint.dev) UI.
+A small VPN client for **Linux**, **Windows** and **Android**, written in Rust with a [Slint](https://slint.dev) UI.
 
 It doesn't implement any VPN protocol itself. It imports your configs, turns them into a config file
 for an existing engine, and runs that engine as a child process:
@@ -15,6 +15,7 @@ for an existing engine, and runs that engine as a child process:
 
 > **Status:** a personal project, early but usable. Tested on Linux (CachyOS) with real servers in
 > Tunnel and proxy modes. Windows builds and passes the tests in CI but hasn't been run on Windows yet.
+> Android (sing-box and OpenVPN, Tunnel and Proxy-only modes) works on a real phone; see [Android](#android).
 > OpenVPN has only been tested locally. It hasn't had a security review.
 
 ## Features
@@ -109,6 +110,29 @@ cargo build --release  # optimized binary: target/release/cipher_client
 
 The proxy modes need no special rights.
 
+## Android
+
+The same app with a phone layout, for arm64 phones on Android 8.0 or newer. It ships sing-box and OpenVPN
+inside the APK; Xray, Psiphon, plugins and the System proxy mode are desktop-only, and configs are added by
+pasting links (no file import yet).
+
+- **Tunnel mode** uses Android's VPN service (Android asks once for permission). sing-box runs as a local
+  proxy and [tun2proxy](https://github.com/tun2proxy/tun2proxy) feeds the VPN's traffic into it. OpenVPN is
+  built for Android, so it asks the app for the VPN's tunnel over its management socket.
+- **Proxy only** serves a SOCKS5/HTTP proxy on `127.0.0.1:2080` for apps that support one.
+
+To build the APK you need the Android SDK (platform 36, build-tools 36.0.0, NDK r27, CMake), a JDK and
+`rustup target add aarch64-linux-android`:
+
+```sh
+android/build.sh            # → target/android/cipher-<version>-arm64.apk
+android/build.sh --debug    # faster, unoptimized
+CIPHER_UI=phone cargo run   # preview the phone layout on a desktop
+```
+
+It uses the SDK tools directly (no Gradle). The first build also compiles OpenVPN and OpenSSL from source
+(`android/openvpn.sh`); later builds reuse it. Without a release key it signs with your debug key.
+
 ## Tests
 
 ```sh
@@ -133,13 +157,18 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-The workflow runs `cargo test` and a release build on Linux (Ubuntu 22.04, x86_64) and Windows (x86_64).
-It then publishes a GitHub Release with `cipher_client-linux-x86_64.tar.gz`, `cipher_client-windows-x86_64.zip`
-and their SHA-256 files. If one OS fails its tests, the release goes out without that OS's binary. It
-refuses a tag that doesn't match the Cargo.toml version.
+The workflow runs `cargo test` and a release build on Linux (Ubuntu 22.04, x86_64) and Windows (x86_64),
+and builds the Android APK. It then publishes a GitHub Release with `cipher_client-linux-x86_64.tar.gz`,
+`cipher_client-windows-x86_64.zip`, `cipher_client-android-arm64.apk` and their SHA-256 files. If one
+platform fails, the release goes out without it. It refuses a tag that doesn't match the Cargo.toml version.
+
+The APK is signed with a release key from repository secrets (`ANDROID_KEYSTORE_BASE64`,
+`ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, optionally `ANDROID_KEY_PASSWORD`); a tag build fails
+without them, because Android only installs updates signed with the same key.
 
 To try a build without releasing: *Actions → Release → Run workflow*. The archives are kept as workflow
-artifacts. Engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app downloads or finds them.
+artifacts. Desktop engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app downloads or finds them.
+The APK bundles sing-box and OpenVPN.
 
 ## How it works
 
@@ -166,7 +195,7 @@ artifacts. Engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app download
 
 | Path | What's there |
 |---|---|
-| `src/main.rs` | Entry point. Calls `app::run()` |
+| `src/lib.rs`, `src/main.rs` | The app is a library (Android loads it as `libcipher_client.so` via `android_main`); the desktop binary calls it |
 | `src/app.rs` | Glue between the UI and everything else: callbacks, background threads, connecting, latency tests |
 | `src/app/screenshots.rs` | Headless Slint platform for the UI test |
 | `src/profile.rs` | `Profile` (Proxy / WireGuard / OpenVPN / Psiphon / Xray / Plugin), `ConnectionMode`, `Settings` |
@@ -179,7 +208,9 @@ artifacts. Engines (sing-box, Psiphon, OpenVPN) aren't bundled: the app download
 | `src/engine/singbox/config/` | Typed serde model of the sing-box config (client-side subset, 1.12+ format only) |
 | `src/engine/singbox/generate.rs` | Builds the sing-box config from a profile and settings (routing rules in `generate/routing.rs`) |
 | `ui/state.slint` | `AppState`: every property and callback shared between Rust and the UI |
-| `ui/main-window.slint`, `ui/panels/`, `ui/components/` | The window, its panels and reusable widgets |
+| `ui/main-window.slint`, `ui/phone-window.slint`, `ui/dialogs.slint`, `ui/panels/`, `ui/components/` | The desktop and phone windows, shared dialogs, panels and reusable widgets |
+| `src/android.rs`, `src/engine/vpn.rs`, `src/engine/openvpn/` | Android: calls into Java (VPN permission, VpnService TUN), sing-box Tunnel mode through tun2proxy, OpenVPN's Android management protocol |
+| `android/` | APK build (`build.sh`), OpenVPN cross-build (`openvpn.sh`), manifest, the Java activity and VPN service, icons |
 | `tests/fixtures/` | sing-box JSON that must survive deserialize → serialize unchanged |
 | `docs/singbox-config.md` | **Detailed guide to the generated sing-box config** and why each part is there |
 | `docs/plugins.md` | **Plugin developer guide**: the manifest, what a plugin must do, root plugins, testing and publishing |

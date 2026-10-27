@@ -1,9 +1,14 @@
-# Builds Linux and Windows binaries and publishes them as a GitHub Release.
+# Builds Linux and Windows binaries and the Android APK, and publishes them as a GitHub Release.
 #
 # Release:   bump `version` in Cargo.toml, commit, then `git tag v0.2.0 && git push origin v0.2.0`
 # Try a build without releasing: Actions → Release → Run workflow (the binaries are kept as artifacts)
 #
 # Only the plain `cargo test` suite runs here: the ignored tests download engines and connect.
+#
+# Android signing (repository secrets): ANDROID_KEYSTORE_BASE64 (`base64 -w0 release.jks`),
+# ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD if it differs from the
+# keystore password. Tag builds need them (updates must be signed with the same key); manual runs
+# without them get a throwaway debug key.
 
 name: Release
 
@@ -83,9 +88,80 @@ jobs:
             cipher_client-${{ matrix.name }}.zip*
           if-no-files-found: error
 
+  android:
+    name: Build (android-arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches Cargo.toml
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+
+      # The versions android/build.sh expects (the runner's preinstalled SDK has others).
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" "platforms;android-36" "build-tools;36.0.0" "ndk;27.3.13750724" "cmake;4.1.2" > /dev/null
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.3.13750724" >> "$GITHUB_ENV"
+
+      # The sing-box download and the OpenVPN build (several minutes), until their pins change.
+      - uses: actions/cache@v4
+        with:
+          path: target/android/cache
+          key: android-engines-${{ hashFiles('android/build.sh', 'android/openvpn.sh') }}
+
+      - name: Set up the release key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "ANDROID_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::Releases need the Android signing secrets (see the top of this workflow)"
+            exit 1
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: this APK is signed with a throwaway debug key"
+          fi
+
+      - name: Build
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: android/build.sh
+
+      - name: Package
+        run: |
+          apk=cipher_client-android-arm64.apk
+          cp target/android/cipher-*-arm64.apk "$apk"
+          sha256sum "$apk" > "$apk.sha256"
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cipher_client-android-arm64
+          path: cipher_client-android-arm64.apk*
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, android]
     # Publishes whichever builds passed; an OS whose tests failed gets no binary.
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest

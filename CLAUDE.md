@@ -24,8 +24,10 @@ android/build.sh [--debug]    # Android APK (arm64) → target/android/cipher-<v
 CIPHER_UI=phone CIPHER_SCREENSHOTS=/tmp/shots cargo test phone_screenshots -- --ignored   # phone frames (400x820)
 ```
 **Releases:** `.github/workflows/release.yml`, on a `v*` tag (must equal the Cargo.toml version) or manual run.
-It runs `cargo test --locked` and then a release build on ubuntu-22.04 + windows-latest (MSVC), and publishes a Release with
-tar.gz/zip + .sha256. There's no per-push CI (the user tests locally). It's the only place Windows gets built.
+It runs `cargo test --locked` and then a release build on ubuntu-22.04 + windows-latest (MSVC), plus an `android` job
+(ubuntu-latest: sdkmanager installs platform 36 / build-tools 36.0.0 / NDK 27.3.13750724 / CMake 4.1.2, caches
+target/android/cache, runs android/build.sh), and publishes a Release with tar.gz/zip/apk + .sha256. APK signing: secrets
+ANDROID_KEYSTORE_BASE64 / _PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD → build.sh env; tag builds fail without them. There's no per-push CI (the user tests locally). It's the only place Windows gets built.
 **Screenshot test safety:** it connects a dummy server in Tunnel mode. The user's `/usr/bin/sing-box` has
 setcap and their own VPN is often up on tun0, so first `cp /usr/bin/sing-box target/debug/deps/` (a copy
 has no caps; found first because it's beside the test exe), and remove it afterwards. Convert frames with
