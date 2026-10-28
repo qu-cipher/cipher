@@ -4,6 +4,7 @@ import { AppState, ConnectionState, ConfigData, EngineData, FieldData, PluginDat
 import { TitleBar } from "./components/title-bar.slint";
 import { ConnectPanel } from "./panels/connect-panel.slint";
 import { LibraryPanel } from "./panels/library-panel.slint";
+import { CompactLayout } from "compact-layout.slint";
 import { Dialogs } from "dialogs.slint";
 
 // Rust needs these to talk to the UI. The tray is desktop-only, but app.rs is shared.
@@ -13,26 +14,53 @@ export { AppState, ConnectionState, ConfigData, EngineData, FieldData, PluginDat
 export component AppWindow inherits Window {
     title: "Cipher VPN Client";
     icon: @image-url("../assets/icon.svg");
-    width: 820px;
-    height: 520px;
+    preferred-width: 820px;
+    preferred-height: 520px;
+    // Narrower than the two-panel layout needs, it switches to the compact (phone) one.
+    min-width: 400px;
+    min-height: 520px;
     no-frame: true;
+    // Frameless, so Slint handles dragging the edges; a maximized window has none to drag.
+    resize-border-width: root.maximized ? 0 : 6px;
     default-font-family: "Geist";
     background: Theme.background;
 
     callback minimize_window();
     callback close_window();
+    // After every size change (app.rs remembers the size for the next start).
+    callback window_resized();
+
+    // Set after each resize rather than bound to the width: which layout is shown changes the
+    // window's size constraints, so a binding would loop.
+    private property <bool> compact;
+    changed width => {
+        root.compact = root.width < 820px;
+        window_resized();
+    }
+    changed height => { window_resized(); }
 
     VerticalLayout {
         TitleBar {
             title: root.title;
-            title_width: parent.width;
+            // The window keeps `maximized` in sync, also when the system maximizes it.
+            maximized: root.maximized;
             on_minimize_clicked => { minimize_window() }
+            on_maximize_clicked => { root.maximized = !root.maximized; }
             on_close_clicked => { close_window() }
         }
 
-        HorizontalLayout {
+        if root.compact: compact-layout := CompactLayout {
+            desktop: true;
+        }
+
+        if !root.compact: HorizontalLayout {
+            // At the default size: 300 + 1 + 519 = 820. Extra width goes mostly to the library;
+            // the connect panel grows a little.
             ConnectPanel {
-                width: 300px;
+                preferred-width: 300px;
+                min-width: 300px;
+                max-width: 400px;
+                horizontal-stretch: 0.3;
                 open-configs => { AppState.current-tab = 1; }
             }
 
@@ -41,11 +69,15 @@ export component AppWindow inherits Window {
                 background: Theme.border;
             }
 
-            LibraryPanel { }
+            LibraryPanel {
+                preferred-width: 519px;
+                horizontal-stretch: 1;
+            }
         }
     }
 
     Dialogs {
         top: 30px;
+        toast-bottom: root.compact ? 68px : 0;
     }
 }

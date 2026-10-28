@@ -18,7 +18,7 @@ use slint::platform::{
     software_renderer::{MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType},
 };
 use slint::{EventLoopError, LogicalPosition, PhysicalSize};
-use std::{cell::RefCell, path::PathBuf, rc::Rc};
+use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc};
 
 #[cfg(not(phone_ui))]
 const WIDTH: u32 = 820;
@@ -64,6 +64,7 @@ struct Driver {
     queue: Queue,
     out: PathBuf,
     frame: RefCell<Vec<PremultipliedRgbaColor>>,
+    width: Cell<u32>,
 }
 
 impl Driver {
@@ -88,11 +89,19 @@ impl Driver {
         self.window.request_redraw();
         let mut frame = self.frame.borrow_mut();
         self.window.draw_if_needed(|renderer| {
-            renderer.render(&mut frame, WIDTH as usize);
+            renderer.render(&mut frame, self.width.get() as usize);
         });
         let bytes: Vec<u8> = frame.iter().flat_map(|p| [p.red, p.green, p.blue, p.alpha]).collect();
         std::fs::write(self.out.join(format!("{name}.rgba")), bytes).unwrap();
         println!("saved {name}");
+    }
+
+    /// Resizes the window, as dragging its edges or maximizing would.
+    fn resize(&self, width: u32, height: u32) {
+        self.window.set_size(PhysicalSize::new(width, height));
+        self.width.set(width);
+        *self.frame.borrow_mut() = vec![PremultipliedRgbaColor::default(); (width * height) as usize];
+        self.pump(30);
     }
 
     fn click(&self, x: f32, y: f32) {
@@ -209,6 +218,7 @@ fn start() -> (AppWindow, Ctx, Timer, Driver) {
         queue,
         out,
         frame: RefCell::new(vec![PremultipliedRgbaColor::default(); (WIDTH * HEIGHT) as usize]),
+        width: Cell::new(WIDTH),
     };
     (ui, ctx, monitor, d)
 }
@@ -319,6 +329,65 @@ fn routing_screenshots() {
     d.window.dispatch_event(WindowEvent::PointerScrolled { position: LogicalPosition::new(600.0, 300.0), delta_x: 0.0, delta_y: 1000.0 });
 
     plugin_frames(&ui, &_ctx, &d);
+}
+
+/// The window resized and maximized. Never connects: `CIPHER_SCREENSHOTS=<dir> cargo test resize_screenshots -- --ignored`
+/// (frames are named by size, e.g. `s1-configs-1600x900.rgba`).
+#[cfg(not(phone_ui))]
+#[test]
+#[ignore = "visual check: CIPHER_SCREENSHOTS=<dir> cargo test resize_screenshots -- --ignored"]
+fn resize_screenshots() {
+    let (ui, ctx, _monitor, d) = start();
+    let state = ui.global::<AppState>();
+    state.invoke_add_links(
+        "trojan://pw@a.example.com:443#Trojan A\n\
+         vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443?security=tls#VLESS B with a rather long name\n\
+         hy2://pw@d.example.com:443#Hysteria D"
+            .into(),
+    );
+    let first = state.get_configs().iter().find(|c| !c.header).unwrap();
+    state.invoke_select_config(first.id);
+    for (width, height) in [(820, 520), (1100, 700), (1600, 900)] {
+        d.resize(width, height);
+        state.set_current_tab(1);
+        d.shot(&format!("s1-configs-{width}x{height}"));
+        state.set_current_tab(3);
+        d.shot(&format!("s2-settings-{width}x{height}"));
+        state.set_links_dialog_open(true);
+        d.pump(300);
+        d.shot(&format!("s3-dialog-{width}x{height}"));
+        state.set_links_dialog_open(false);
+        d.pump(300);
+    }
+
+    // Narrow: the compact layout, with what the phone hides (System proxy, Plugins).
+    for (width, height) in [(819, 520), (400, 520), (400, 800)] {
+        d.resize(width, height);
+        state.set_current_tab(2);
+        d.shot(&format!("s4-plugins-{width}x{height}"));
+        state.set_current_tab(3);
+        d.shot(&format!("s5-settings-{width}x{height}"));
+        d.click(100.0, (height - 34) as f32); // bottom bar: Connect
+        d.shot(&format!("s6-connect-{width}x{height}"));
+        // Taller than a short window: the connect screen scrolls.
+        state.set_error("sing-box exited: start service: initialize inbound/tun[tun-in]: configure tun interface: operation not permitted".into());
+        d.shot(&format!("s6b-connect-error-{width}x{height}"));
+        state.set_error("".into());
+        state.set_links_dialog_open(true);
+        d.pump(300);
+        d.shot(&format!("s7-dialog-{width}x{height}"));
+        state.set_links_dialog_open(false);
+        d.pump(300);
+    }
+    d.resize(820, 520);
+    d.shot("s8-back-820x520");
+
+    // The size is saved on exit, and saved in state.json for the next start.
+    d.resize(1000, 640);
+    super::window::save(&ui, &ctx);
+    let saved = crate::store::WindowSize { width: 1000, height: 640, maximized: false };
+    assert_eq!(ctx.store.lock().unwrap().window, Some(saved));
+    assert_eq!(crate::store::Store::load().window, Some(saved));
 }
 
 /// The Plugins tab with installed (fake) plugins, the add review, a settings form and the

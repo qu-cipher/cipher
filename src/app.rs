@@ -106,9 +106,13 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     // Matches cipher_client.desktop, so the shell shows the launcher icon for this window.
     #[cfg(not(target_os = "android"))]
     slint::set_xdg_app_id("cipher_client")?;
+    let saved_window = store.window;
     let (ctx, _monitor) = init(&ui, store);
+    window::restore(&ui, saved_window);
 
     ui.run()?;
+
+    window::save(&ui, &ctx);
 
     // Take the tunnel down before exiting; stopping can take a few seconds, so hide first.
     ui.hide()?;
@@ -169,6 +173,14 @@ fn bind_window(ui: &AppWindow) {
             }
         }
     });
+    ui.on_window_resized({
+        let weak = ui.as_weak();
+        move || {
+            if let Some(ui) = weak.upgrade() {
+                window::resized(&ui);
+            }
+        }
+    });
 }
 
 const SCALE_FACTOR_VAR: &str = "SLINT_SCALE_FACTOR";
@@ -204,6 +216,7 @@ macro_rules! on {
 
 mod plugins;
 mod tray;
+mod window;
 
 fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
     plugins::bind(ui, ctx);

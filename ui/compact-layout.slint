@@ -1,0 +1,184 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppState, ConnectionState } from "state.slint";
+import { ConnectPanel } from "./panels/connect-panel.slint";
+import { LibraryPanel } from "./panels/library-panel.slint";
+
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> active;
+
+    callback clicked();
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+
+        HorizontalLayout {
+            alignment: center;
+
+            // The active item's pill behind the icon.
+            Rectangle {
+                width: 56px;
+                height: 30px;
+                border-radius: self.height / 2;
+                background: root.active ? Theme.selected : transparent;
+                animate background { duration: 150ms; }
+
+                Image {
+                    source: root.icon;
+                    width: 20px;
+                    height: 20px;
+                    colorize: root.active ? Theme.accent : Theme.text-muted;
+                }
+            }
+        }
+
+        Text {
+            text: root.label;
+            font-size: 11px;
+            font-weight: root.active ? 600 : 400;
+            horizontal-alignment: center;
+            color: root.active ? Theme.text : Theme.text-muted;
+        }
+    }
+
+    TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+// The narrow layout: the connect screen and the library as two screens with a bottom bar.
+// The phone window is just this; the desktop window switches to it when it gets narrow.
+export component CompactLayout inherits VerticalLayout {
+    // A desktop window: offers System proxy and the Plugins tab, and has a smaller power button.
+    in property <bool> desktop;
+    // Space below the bottom bar's items (a phone's navigation bar); the bar's background fills it.
+    in property <length> bottom-inset;
+    // The bottom bar's height, for keeping the toast clear of it.
+    out property <length> bar-height: 68px;
+
+    // 0 = connect, 1 = library.
+    private property <int> screen: 0;
+    // Anything that picks a library tab (the selected-config card, a hint pointing at Settings)
+    // shows the library.
+    private property <int> tab: AppState.current-tab;
+    changed tab => { root.screen = 1; }
+
+    private property <ConnectionState> state: AppState.connection;
+    private property <bool> connected: state == ConnectionState.connected;
+    private property <bool> busy: state == ConnectionState.connecting || state == ConnectionState.disconnecting;
+
+    // ── Header ──
+    // On a desktop the title bar already names the app, and the connect screen needs the height.
+    if !root.desktop || root.screen == 1: Rectangle {
+        height: 52px;
+        background: root.screen == 0 ? Theme.panel : Theme.background;
+
+        HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 18px;
+            spacing: 10px;
+            // The app name sits in the middle; the library's title is on the left, its status on the right.
+            alignment: root.screen == 0 ? LayoutAlignment.center : LayoutAlignment.stretch;
+
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 4px;
+                    background: Theme.accent;
+                }
+            }
+
+            Text {
+                text: root.screen == 0 ? "Cipher" : "Library";
+                font-size: 18px;
+                font-weight: 700;
+                vertical-alignment: center;
+            }
+
+            if root.screen == 1: Rectangle { horizontal-stretch: 1; }
+
+            // The connection state, so it stays visible on the library screen.
+            if root.screen == 1: HorizontalLayout {
+                spacing: 6px;
+                alignment: end;
+
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 4px;
+                        background: root.connected ? Theme.connected : root.busy ? Theme.connecting : Theme.idle;
+                    }
+                }
+
+                Text {
+                    text: root.connected ? "Connected" : root.busy ? "Working…" : "Disconnected";
+                    font-size: 12px;
+                    vertical-alignment: center;
+                    color: root.connected ? Theme.connected : root.busy ? Theme.connecting : Theme.text-muted;
+                }
+            }
+        }
+    }
+
+    // Scrolls when it doesn't fit (a short window, an error message); otherwise fills the height
+    // so the content stays centered.
+    if root.screen == 0: scroll := ScrollView {
+        vertical-stretch: 1;
+        content-width: self.visible-width;
+        content-height: max(self.visible-height, panel.min-height);
+
+        panel := ConnectPanel {
+            width: scroll.content-width;
+            height: scroll.content-height;
+            size: root.desktop ? 128px : 168px;
+            system-proxy: root.desktop;
+            open-configs => {
+                AppState.current-tab = 1;
+                root.screen = 1;
+            }
+        }
+    }
+
+    if root.screen == 1: LibraryPanel {
+        vertical-stretch: 1;
+        plugins: root.desktop;
+        compact: true;
+    }
+
+    // ── Bottom bar ──
+    Rectangle {
+        height: root.bar-height + root.bottom-inset;
+        background: Theme.panel;
+
+        Rectangle {
+            y: 0;
+            height: 1px;
+            background: Theme.border;
+        }
+
+        HorizontalLayout {
+            padding-bottom: root.bottom-inset;
+
+            NavItem {
+                label: "Connect";
+                icon: @image-url("../assets/icons/MdiPowerStandby.svg");
+                active: root.screen == 0;
+                clicked => { root.screen = 0; }
+            }
+
+            NavItem {
+                label: "Library";
+                icon: @image-url("../assets/icons/MdiFormatListGroup.svg");
+                active: root.screen == 1;
+                clicked => { root.screen = 1; }
+            }
+        }
+    }
+}

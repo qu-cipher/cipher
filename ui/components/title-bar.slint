@@ -26,16 +26,22 @@ component WindowButton inherits Rectangle {
 
 export component TitleBar inherits Rectangle {
     in property <string> title;
-    in property <length> title_width;
+    // Shows the restore icon instead of maximize.
+    in property <bool> maximized;
 
     callback on_minimize_clicked();
+    callback on_maximize_clicked();
     callback on_close_clicked();
 
-    width: title_width;
     height: 30px;
     background: Theme.panel;
 
-    WindowMoveArea { }
+    WindowMoveArea {
+        // Moving starts only once the pointer is dragged, so a double-click still gets here.
+        TouchArea {
+            double-clicked => { on_maximize_clicked() }
+        }
+    }
 
     // Bottom edge.
     Rectangle {
@@ -81,6 +87,14 @@ export component TitleBar inherits Rectangle {
                 WindowButton {
                     icon: @image-url("../../assets/icons/MdiWindowMinimize.svg");
                     clicked => { on_minimize_clicked() }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                WindowButton {
+                    icon: root.maximized ? @image-url("../../assets/icons/MdiWindowRestore.svg") : @image-url("../../assets/icons/MdiWindowMaximize.svg");
+                    clicked => { on_maximize_clicked() }
                 }
             }
 

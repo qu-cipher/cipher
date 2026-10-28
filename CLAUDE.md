@@ -33,6 +33,7 @@ setcap and their own VPN is often up on tun0, so first `cp /usr/bin/sing-box tar
 has no caps; found first because it's beside the test exe), and remove it afterwards. Convert frames with
 `magick -size 820x520 -depth 8 rgba:f.rgba f.png`. Emoji flags render blank there (no emoji font); that's expected.
 
+Sheets animate a 0..1 `shown` value, not `y`, so closed ones don't slide into view while the window resizes.
 UI theme: all colors are tokens in `ui/theme.slint` (navy base, cyan accent matching Fluent's, per-protocol
 badge colors). Avoid gradients on rounded shapes: the software renderer drops the corner radius.
 Use `Toggle` (buttons.slint) instead of the Fluent `Switch`.
@@ -50,8 +51,19 @@ src/
   app/tray.rs        Tray (ui/tray.slint, a SystemTrayIcon-rooted component exported from both windows; thread_local, not on
                      Android or in tests), update() from set_state, close(): quit, or with close_to_tray hide (tray host checked
                      via dbus-send NameHasOwner org.kde.StatusNotifierWatcher on Linux; none → minimize). Handles both our ✕ and WM close
+  app/window.rs      desktop window size + place: `window_resized` (Slint `changed width/height`) remembers the normal
+                     (not max/minimized) logical size; saved on exit as Store.window {width, height, maximized} and
+                     restored before the first show. Position: session only (hide to tray → show puts it back, also
+                     maximized); a new start is placed by the system. No-op on Android.
+                     Wayland: Slint DESTROYS the window on hide and recreates it at the preferred size (820x520) unless
+                     set_size was called, still caching maximized=true (so set_maximized(true) no-ops): show() sets the
+                     size and toggles maximized false→true before showing. Never toggle maximized on a hidden window
+                     elsewhere (winit's ShowWindow shows it on Windows). Wayland can't restore positions (KWin places it).
+                     Verified on KDE Wayland via KWin scripts (frameGeometry/closeWindow/setMaximize, filtered by pid)
+                     + the tray's dbusmenu Event over busctl (ids: 2 Show, 5 Quit)
   app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, anti-DPI, grouped
-                     Configs list with a Psiphon entry; never connects: safe)
+                     Configs list with a Psiphon entry; `resize_screenshots`: 820x520 / 1100x700 / 1600x900, then
+                     compact at 819x520 / 400x520 / 400x800, via Driver::resize; never connect: safe)
   profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name, source: PsiphonSource}, Xray{name, outbound: XrayOutbound}},
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
                      PsiphonSource {ServerEntry(hex) → "server_entry", Network(map) → "network"} (serde-flattened),
@@ -63,7 +75,7 @@ src/
   routing.rs         Routing {default: Target, presets, rules}, Rule {enabled, kind, values, target}, RuleKind (Domain/Keyword/Ip/Port/App/Geosite/Geoip),
                      Preset (Iran/China/Russia direct, BlockAds), Rule::parse (normalizes input), effective_rules() (custom, then presets)
   store.rs           Store persisted as state.json (atomic write, 0600; corrupt → .bak): settings, manual entries,
-                     subscriptions (with entries, usage, updated_at), selected id, next_id;
+                     subscriptions (with entries, usage, updated_at), selected id, window (last size), next_id;
                      Store::migrated: an old settings.psiphon.network (≤0.3) becomes a manual Psiphon config on load
   engine.rs          Engine trait (start/stop/status/ready), EngineKind, Status, EngineError, engine_for()
   engine/process.rs  child process → log file; SIGTERM then kill after 5s; stops on Drop; last log line = error msg;
@@ -128,9 +140,16 @@ src/
   import/xray.rs          links needing Xray (xhttp/splithttp/kcp/mkcp, VLESS encryption) → Profile::Xray; hooked in vless/vmess/trojan
 ui/
   state.slint        AppState global: ALL Rust↔UI properties & callbacks (structs ConfigData, SubscriptionData, enum ConnectionState)
-  main-window.slint  AppWindow (820x520, frameless): TitleBar, ConnectPanel | LibraryPanel, Dialogs
-  phone-window.slint AppWindow for phones: header, Connect / Library screens + bottom bar, safe-area insets; no System proxy
-                     mode, no Plugins tab (TabBar `values` maps the shorter tab lists onto the same indices)
+  main-window.slint  AppWindow (frameless, resizable, min 400x520; Slint's resize-border-width does the edges, the builtin
+                     `maximized` property drives the title bar's maximize/restore button + double-click): TitleBar, then
+                     ≥ 820px wide: ConnectPanel (300→400px) | LibraryPanel (content capped at 1040px, centered);
+                     narrower: CompactLayout{desktop: true}. `compact` is set in `changed width` (a binding would loop
+                     through the window's size constraints). Dialogs
+  compact-layout.slint  CompactLayout: header, Connect (in a ScrollView, centered when it fits) / Library screens + bottom
+                     bar. `desktop` = System proxy mode + Plugins tab, 128px power button, no header on the connect screen;
+                     without it (phone): no System proxy, no Plugins tab (TabBar `values` maps the shorter tab lists onto
+                     the same indices). Desktop-only settings hang on AppState.bundled-engines (Android), not on the layout
+  phone-window.slint AppWindow for phones: CompactLayout inside the safe-area insets
   dialogs.slint      Dialogs: all Sheets (subscription / links / OpenVPN creds / rule / plugin dialogs) + toast, shared by both windows
   theme.slint        Theme colors (always dark)
   panels/            connect, library (tabs: subscriptions, configs, settings), configs, subscriptions, settings
@@ -201,19 +220,29 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Linux tunnel privileges: one pkexec password dialog per Tunnel connect; the engine runs as root (no setcap,
   no polkit rule; the old Grant button was removed 2026-10-18). Windows: whole app runs elevated.
 - Never connect to real VPN servers when testing; the user verifies connections. Test locally (unit tests, `sing-box check`).
-- Git repo since 2026-10-18 (branch `master`, remote `origin` = github.com/qu-cipher/cipher; v0.2.0 released 2026-10-26). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
+- Git repo since 2026-10-18 (branch `master`, remote `origin` = github.com/qu-cipher/cipher; latest release v0.4.1, tagged 2026-10-27). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
-## Status & history (as of 2026-10-26)
-v0.3.0 = Xray core + anti-DPI toggles (TLS fragment, UDP noise). Next-version ideas: docs/addons-plan.md (local only, gitignored)
-(add-on framework, SNI spoofing; DNS tunnels undecided). Then (next version): Psiphon back for users' own servers.
+## Status & history (as of 2026-10-27)
+Releases: v0.3.0 = Xray core + anti-DPI toggles. 0.3.1 (Psiphon back for users' own servers) was never tagged. v0.4.0 = plugin system.
+v0.4.1 (tag pushed 2026-10-27) = core plugins + official MasterDnsVPN plugin, Android build (phone UI, Tunnel mode, OpenVPN),
+traffic box, tray icon + close to tray, UI scale, settings layout fixes. First release with a signed APK: release key
+`~/.android/cipher-release.jks` (alias `cipher`, password in `~/.android/cipher-release-password.txt`; never regenerate,
+Android only installs updates signed with it), stored in the repo's ANDROID_* Actions secrets.
+Releasing = bump Cargo.toml, commit, then push a `v*` tag; pushing commits alone builds nothing.
+Next: official sni-spoofing-rust plugin (docs/plugins-plan.md, private); addons ideas in docs/addons-plan.md (private).
 Maybe later: built-in public VPN servers for general use (user's idea, not planned yet).
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 102 tests passing (+12 ignored) at last count (core plugins 2026-10-26); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 108 tests passing (+13 ignored) at last count (2026-10-27); clippy mostly clean.
 
-User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix).
+User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix), UI scale (live and at startup), tray icon +
+close to tray (KDE), sing-box + OpenVPN on the user's Android phone.
 Pending / unverified:
+- Traffic box (2026-10-27): sing-box counting checked by e2e tests (plain + chained behind a plugin). Not yet watched on a real
+  connection; OpenVPN's status file (written by root in Tunnel mode) is untested; if unreadable the box shows "—".
+  Counts include direct-routed traffic and DNS (sing-box's Clash API totals).
+- Tray on Windows and on desktops without a StatusNotifierItem host (closing should minimize there): untested.
 - Plugin system (2026-10-26, uncommitted at first): unit + e2e tests (sing-box as fake engine/transport plugins, root path via an
   in-process helper) pass; real `--elevated-helper` mode checked over stdin without pkexec. NOT yet verified: a real pkexec prompt
   with a root plugin (one prompt for plugin + TUN), real GitHub install of a published plugin, Windows.

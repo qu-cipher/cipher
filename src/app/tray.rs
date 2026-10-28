@@ -1,6 +1,6 @@
 //! The desktop tray icon, and what closing the window does (quit, or hide to the tray).
 
-use super::{Ctx, toggle_connection};
+use super::{Ctx, toggle_connection, window};
 use crate::{AppWindow, ConnectionState, Tray};
 use slint::{CloseRequestResponse, ComponentHandle};
 use std::cell::RefCell;
@@ -45,8 +45,7 @@ pub(super) fn init(ui: &AppWindow, ctx: &Ctx) {
         let weak = ui.as_weak();
         move || {
             if let Some(ui) = weak.upgrade() {
-                let _ = ui.show();
-                ui.window().set_minimized(false);
+                window::show(&ui);
             }
         }
     });
@@ -91,7 +90,7 @@ fn close(ui: &AppWindow, ctx: &Ctx) {
     if !ctx.store.lock().unwrap().settings.close_to_tray {
         let _ = slint::quit_event_loop();
     } else if TRAY.with(|t| t.borrow().is_some()) && host_available() {
-        let _ = ui.hide();
+        window::hide(ui);
     } else {
         ui.window().set_minimized(true);
     }

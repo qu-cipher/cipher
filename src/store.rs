@@ -34,6 +34,15 @@ pub struct StoredSubscription {
     pub entries: Vec<Entry>,
 }
 
+/// The desktop window's size (logical pixels) when the app last quit, restored on the next start.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowSize {
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Store {
@@ -42,6 +51,8 @@ pub struct Store {
     pub manual: Vec<Entry>,
     pub subscriptions: Vec<StoredSubscription>,
     pub selected: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowSize>,
     next_id: u64,
 
     #[serde(skip)]

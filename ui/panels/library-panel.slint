@@ -12,19 +12,28 @@ export component LibraryPanel inherits Rectangle {
     // Narrow (phone) layout.
     in property <bool> compact;
 
-    VerticalLayout {
-        padding: 12px;
-        spacing: 10px;
+    // On a wide (maximized) window the content stays readable and centered.
+    HorizontalLayout {
+        alignment: center;
 
-        TabBar {
-            tabs: root.plugins ? ["Subscriptions", "Configs", "Plugins", "Settings"] : ["Subscriptions", "Configs", "Settings"];
-            values: root.plugins ? [0, 1, 2, 3] : [0, 1, 3];
-            current <=> AppState.current-tab;
+        VerticalLayout {
+            // A centered layout sizes its child by the preferred width.
+            preferred-width: 1040px;
+            max-width: 1040px;
+            horizontal-stretch: 1;
+            padding: 12px;
+            spacing: 10px;
+
+            TabBar {
+                tabs: root.plugins ? ["Subscriptions", "Configs", "Plugins", "Settings"] : ["Subscriptions", "Configs", "Settings"];
+                values: root.plugins ? [0, 1, 2, 3] : [0, 1, 3];
+                current <=> AppState.current-tab;
+            }
+
+            if AppState.current-tab == 0: SubscriptionsPanel { vertical-stretch: 1; }
+            if AppState.current-tab == 1: ConfigsPanel { vertical-stretch: 1; compact: root.compact; }
+            if AppState.current-tab == 2: PluginsPanel { vertical-stretch: 1; }
+            if AppState.current-tab == 3: SettingsPanel { vertical-stretch: 1; }
         }
-
-        if AppState.current-tab == 0: SubscriptionsPanel { vertical-stretch: 1; }
-        if AppState.current-tab == 1: ConfigsPanel { vertical-stretch: 1; compact: root.compact; }
-        if AppState.current-tab == 2: PluginsPanel { vertical-stretch: 1; }
-        if AppState.current-tab == 3: SettingsPanel { vertical-stretch: 1; }
     }
 }

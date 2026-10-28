@@ -10,6 +10,11 @@ export component Sheet inherits Rectangle {
 
     clip: true;
 
+    // 0 = closed, 1 = open. Animating this instead of `y` keeps a closed sheet below the
+    // bottom edge while the window resizes.
+    private property <float> shown: root.open ? 1 : 0;
+    animate shown { duration: 220ms; easing: ease-out; }
+
     Rectangle {
         background: #03060a;
         opacity: root.open ? 0.65 : 0;
@@ -21,11 +26,11 @@ export component Sheet inherits Rectangle {
     }
 
     Rectangle {
-        x: 16px;
-        y: root.open ? root.height - self.height - 16px : root.height + 8px;
-        width: root.width - 32px;
+        // Not wider than at the default window size.
+        width: min(root.width - 32px, 800px);
+        x: (root.width - self.width) / 2;
+        y: root.height + 8px - (self.height + 24px) * root.shown;
         height: root.sheet-height;
-        animate y { duration: 220ms; easing: ease-out; }
 
         background: Theme.surface-raised;
         border-radius: 16px;
