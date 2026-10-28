@@ -1,11 +1,14 @@
 import { Theme } from "../theme.slint";
 import { ConfigData } from "../state.slint";
+import { IconButton } from "buttons.slint";
 
-// Heading of a protocol group in the Configs list. Click to fold the group.
+// Heading of a protocol group in the Configs list. Click to fold the group; the arrows move it.
 export component GroupHeader inherits Rectangle {
     in property <ConfigData> data;
 
     callback clicked();
+    // -1 = up, 1 = down
+    callback move(int);
 
     height: 28px;
     border-radius: 8px;
@@ -18,7 +21,7 @@ export component GroupHeader inherits Rectangle {
 
     HorizontalLayout {
         padding-left: 6px;
-        padding-right: 10px;
+        padding-right: 4px;
         spacing: 6px;
 
         VerticalLayout {
@@ -55,6 +58,28 @@ export component GroupHeader inherits Rectangle {
             font-size: 11px;
             vertical-alignment: center;
             color: Theme.text-faint;
+        }
+
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: @image-url("../../assets/icons/MdiArrowUp.svg");
+                size: 13px;
+                icon-color: Theme.text-faint;
+                enabled: !data.first;
+                clicked => { root.move(-1); }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: @image-url("../../assets/icons/MdiArrowDown.svg");
+                size: 13px;
+                icon-color: Theme.text-faint;
+                enabled: !data.last;
+                clicked => { root.move(1); }
+            }
         }
     }
 }

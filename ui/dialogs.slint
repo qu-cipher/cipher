@@ -15,11 +15,13 @@ export component Dialogs inherits Rectangle {
     // Focus the text field when a dialog opens.
     private property <bool> sub-open: AppState.sub-dialog-open;
     private property <bool> links-open: AppState.links-dialog-open;
+    private property <bool> edit-open: AppState.edit-dialog-open;
     private property <bool> creds-open: AppState.creds-dialog-open;
     private property <bool> rule-open: AppState.rule-dialog-open;
     changed rule-open => { if self.rule-open { rule-input.focus(); } }
     changed sub-open => { if self.sub-open { url-input.focus(); } }
     changed links-open => { if self.links-open { links-input.focus(); } }
+    changed edit-open => { if self.edit-open { name-input.focus(); } }
     changed creds-open => { if self.creds-open { username-input.focus(); } }
 
     // ── Add subscription ──
@@ -110,6 +112,67 @@ export component Dialogs inherits Rectangle {
                 primary: true;
                 enabled: AppState.links-dialog-text != "";
                 clicked => { AppState.add-links(AppState.links-dialog-text); }
+            }
+        }
+    }
+
+    // ── Edit a manual config ──
+    Sheet {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        open: AppState.edit-dialog-open;
+        title: "Edit config";
+        sheet-height: AppState.edit-dialog-error != "" ? 330px : 306px;
+        dismiss => { AppState.edit-dialog-open = false; }
+
+        Text {
+            text: "Name";
+            font-size: 11px;
+            color: Theme.text-muted;
+        }
+
+        name-input := LineEdit {
+            font-size: 13px;
+            placeholder-text: "Shown in the list";
+            text <=> AppState.edit-dialog-name;
+        }
+
+        Text {
+            text: AppState.edit-dialog-has-link
+                ? "Link: change it to update this config's server and settings."
+                : "Link: this config wasn't added from a link. Paste one to replace its settings.";
+            font-size: 11px;
+            color: Theme.text-muted;
+            wrap: word-wrap;
+        }
+
+        edit-link-input := TextEdit {
+            vertical-stretch: 1;
+            font-size: 12px;
+            wrap: char-wrap;
+            text <=> AppState.edit-dialog-link;
+        }
+
+        if AppState.edit-dialog-error != "": Text {
+            text: AppState.edit-dialog-error;
+            font-size: 11px;
+            color: Theme.danger;
+            wrap: word-wrap;
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            PillButton {
+                text: "Cancel";
+                clicked => { AppState.edit-dialog-open = false; }
+            }
+
+            PillButton {
+                text: "Save";
+                primary: true;
+                clicked => { AppState.save-config(); }
             }
         }
     }

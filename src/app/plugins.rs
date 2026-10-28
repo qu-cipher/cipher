@@ -408,7 +408,7 @@ fn save_fields(ui: &AppWindow, ctx: &Ctx) {
     match target {
         FieldsTarget::NewConfig { plugin } => {
             state.set_fields_dialog_open(false);
-            let ids = add_manual(ui, ctx, vec![Profile::Plugin { name, plugin, link: None, fields }]);
+            let ids = add_manual(ui, ctx, vec![(Profile::Plugin { name, plugin, link: None, fields }, None)]);
             if let Some(id) = ids.first() {
                 super::select_config(ui, ctx, *id);
             }

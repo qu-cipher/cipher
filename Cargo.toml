@@ -1,6 +1,6 @@
 [package]
 name = "cipher_client"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 license = "GPL-3.0-only"
 
@@ -30,8 +30,9 @@ lto = true
 # Native file dialogs; Android picks files through the system picker instead.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 rfd = "0.17.2"
-# Slint's default features.
-slint = { version = "1.18.1", features = ["backend-default", "renderer-femtovg", "renderer-software", "accessibility", "system-tray"] }
+# Slint's default features, plus winit access (app/window.rs). That API is unstable: Slint asks for a
+# `~` requirement with it, so a minor update is a deliberate change.
+slint = { version = "~1.18.1", features = ["backend-default", "renderer-femtovg", "renderer-software", "accessibility", "system-tray", "unstable-winit-030"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 slint = { version = "1.18.1", features = ["backend-android-activity-06", "renderer-femtovg"] }

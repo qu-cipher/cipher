@@ -59,10 +59,15 @@ src/
                      set_size was called, still caching maximized=true (so set_maximized(true) no-ops): show() sets the
                      size and toggles maximized false→true before showing. Never toggle maximized on a hidden window
                      elsewhere (winit's ShowWindow shows it on Windows). Wayland can't restore positions (KWin places it).
+                     apply_min_size() sets the 400x520 minimum on the winit window (slint `unstable-winit-030`, hence
+                     `slint = "~1.18.1"` on desktop) at startup, after a recreating show and a UI scale change: the
+                     recreated window had none (min 20x20, shrinkable until the layout broke), and with a UI scale
+                     Slint scales its own limit twice. Retries on a 50 ms timer until the winit window exists.
                      Verified on KDE Wayland via KWin scripts (frameGeometry/closeWindow/setMaximize, filtered by pid)
                      + the tray's dbusmenu Event over busctl (ids: 2 Show, 5 Quit)
   app/screenshots.rs headless Slint platform driving the real UI in tests (`routing_screenshots`: routing, anti-DPI, grouped
-                     Configs list with a Psiphon entry; `resize_screenshots`: 820x520 / 1100x700 / 1600x900, then
+                     Configs list with a Psiphon entry; `config_list_screenshots`: edit dialog, sort by ping (local
+                     open/closed ports), moving a group; `resize_screenshots`: 820x520 / 1100x700 / 1600x900, then
                      compact at 819x520 / 400x520 / 400x800, via Driver::resize; never connect: safe)
   profile.rs         Profile enum {Proxy{outbound}, WireGuard{endpoint}, OpenVpn{config: OpenVpnConfig, credentials}, Psiphon{name, source: PsiphonSource}, Xray{name, outbound: XrayOutbound}},
                      OpenVpnConfig {File(path) → "config_path", Inline(text) → "config"} (serde-flattened, old state.json loads),
@@ -172,8 +177,15 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   Proxy modes get a `resolve` action before the first IP rule. Details in docs/singbox-config.md §6.1.
 - **Imports**: `import_files` by extension: `.ovpn`, `.conf` (WireGuard), else text of links. Links dialog → `parse_links`.
   Subscriptions update in place; selection follows the same server name.
-- **Configs grouping**: `refresh_configs` → `grouped()` sorts rows by `GROUP_ORDER` and inserts heading rows
-  (`ConfigData.header`, id -1, `count`, `collapsed`); folded groups live in `Shared.collapsed` (session only).
+- **Configs grouping**: `refresh_configs` → `grouped()` sorts rows by `group_order(settings)` (Settings.group_order,
+  the user's, then `GROUP_ORDER`; unknown groups after, by name) and inserts heading rows (`ConfigData.header`, id -1,
+  `count`, `collapsed`, `first`/`last`); folded groups live in `Shared.collapsed` (session only, by name). The header
+  arrows → `move_group` → `moved_group()` (moves among the shown groups). `Settings.sort_by_latency` (toolbar) sorts
+  rows by `latency_rank` before grouping (stable); a latency test re-sorts once at the end, not per result.
+- **Editing configs**: manual only (`Store::manual_mut`). `Entry.link` = the share link it was added from
+  (`Subscription.links`, by index; `into_imported()` pairs them; subscription entries don't keep links). Edit dialog
+  (`edit_config` / `save_config`): a changed link is re-parsed (exactly one config) and replaces the profile, then
+  the name applies; reconnects if it was the connected config.
 - **Anti-DPI** (Settings → ANTI-DPI): `tls_fragment` → sing-box `tls.fragment` on TLS-enabled TCP outbounds
   (`Outbound::tcp_tls_mut`), Xray `finalmask.tcp` fragment (`tlshello`) on non-kcp; `udp_noise` → Xray `finalmask.udp`
   noise on kcp only. Both shapes pass `xray run -test` 26.10.21 / `sing-box check` (also with Reality). Old
@@ -220,21 +232,24 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Linux tunnel privileges: one pkexec password dialog per Tunnel connect; the engine runs as root (no setcap,
   no polkit rule; the old Grant button was removed 2026-10-18). Windows: whole app runs elevated.
 - Never connect to real VPN servers when testing; the user verifies connections. Test locally (unit tests, `sing-box check`).
-- Git repo since 2026-10-18 (branch `master`, remote `origin` = github.com/qu-cipher/cipher; latest release v0.4.1, tagged 2026-10-27). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
+- Git repo since 2026-10-18 (branch `master`, remote `origin` = github.com/qu-cipher/cipher; latest release v0.4.2, tagged 2026-10-28). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
-## Status & history (as of 2026-10-27)
+## Status & history (as of 2026-10-28)
 Releases: v0.3.0 = Xray core + anti-DPI toggles. 0.3.1 (Psiphon back for users' own servers) was never tagged. v0.4.0 = plugin system.
 v0.4.1 (tag pushed 2026-10-27) = core plugins + official MasterDnsVPN plugin, Android build (phone UI, Tunnel mode, OpenVPN),
 traffic box, tray icon + close to tray, UI scale, settings layout fixes. First release with a signed APK: release key
 `~/.android/cipher-release.jks` (alias `cipher`, password in `~/.android/cipher-release-password.txt`; never regenerate,
 Android only installs updates signed with it), stored in the repo's ANDROID_* Actions secrets.
+v0.4.2 (tag pushed 2026-10-28) = first round of real users' feedback (Windows users): resizable window (maximize,
+compact layout below 820px, size remembered, minimum size kept), editing manual configs (name + link), sort by ping,
+user-ordered protocol groups.
 Releasing = bump Cargo.toml, commit, then push a `v*` tag; pushing commits alone builds nothing.
 Next: official sni-spoofing-rust plugin (docs/plugins-plan.md, private); addons ideas in docs/addons-plan.md (private).
 Maybe later: built-in public VPN servers for general use (user's idea, not planned yet).
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 108 tests passing (+13 ignored) at last count (2026-10-27); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 112 tests passing (+15 ignored) at last count (2026-10-28); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix), UI scale (live and at startup), tray icon +
 close to tray (KDE), sing-box + OpenVPN on the user's Android phone.

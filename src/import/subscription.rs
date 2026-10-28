@@ -51,8 +51,18 @@ pub struct Subscription {
     pub title: Option<String>,
     pub usage: Option<Usage>,
     pub profiles: Vec<Profile>,
+    /// The share link each profile came from, by index (shorter when some came from JSON).
+    pub links: Vec<Option<String>>,
     /// Links that couldn't be imported, with the reason.
     pub skipped: Vec<String>,
+}
+
+impl Subscription {
+    /// The profiles, each with its share link if it came from one.
+    pub fn into_imported(self) -> Vec<(Profile, Option<String>)> {
+        let mut links = self.links.into_iter();
+        self.profiles.into_iter().map(|profile| (profile, links.next().flatten())).collect()
+    }
 }
 
 /// Downloads and parses a subscription. Blocking: call it off the UI thread.
@@ -138,7 +148,11 @@ pub fn parse_links(text: &str) -> Subscription {
             false => parse_link(line),
         };
         match parsed {
-            Ok(profile) => subscription.profiles.push(profile),
+            Ok(profile) => {
+                subscription.links.resize(subscription.profiles.len(), None);
+                subscription.links.push(Some(line.to_owned()));
+                subscription.profiles.push(profile);
+            }
             Err(e) => subscription.skipped.push(format!("{}: {e}", line.split("://").next().unwrap_or(line))),
         }
     }
@@ -168,6 +182,21 @@ mod tests {
 
         assert_eq!(Usage::parse("upload=0; download=5.0; total=0; expire=0").unwrap().expire, None);
         assert_eq!(Usage::parse("garbage"), None);
+    }
+
+    #[test]
+    fn keeps_each_configs_link() {
+        let links = "trojan://pw@a.example.com:443#A\nssr://not-supported\n\nvless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443#B";
+        let imported = parse_links(links).into_imported();
+        let pairs: Vec<_> = imported.iter().map(|(p, link)| (p.name(), link.as_deref())).collect();
+        assert_eq!(pairs, [
+            ("A", Some("trojan://pw@a.example.com:443#A")),
+            ("B", Some("vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443#B")),
+        ]);
+
+        // sing-box JSON has no links.
+        let json = r#"{"outbounds": [{"type": "trojan", "tag": "J", "server": "j.example.com", "server_port": 443, "password": "pw"}]}"#;
+        assert!(matches!(parse_links(json).into_imported().as_slice(), [(_, None)]));
     }
 
     #[test]

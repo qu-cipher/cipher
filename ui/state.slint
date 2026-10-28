@@ -28,6 +28,9 @@ export struct ConfigData {
     header: bool,
     count: int,
     collapsed: bool,
+    // A heading's place among the shown groups (disables its move buttons).
+    first: bool,
+    last: bool,
 }
 
 export struct PresetData {
@@ -113,6 +116,8 @@ export global AppState {
     in-out property <int> filter-index;
     // Group the list by protocol (saved with the settings)
     in-out property <bool> group-configs: true;
+    // Sort by the last latency test (saved with the settings)
+    in-out property <bool> sort-by-latency;
     in property <bool> testing;
 
     // ── Navigation (UI only) ──
@@ -127,6 +132,15 @@ export global AppState {
     in-out property <bool> links-dialog-open;
     in-out property <string> links-dialog-text;
     in-out property <string> links-dialog-error;
+
+    // Editing a manual config: Rust opens it with the config's name and link.
+    in-out property <bool> edit-dialog-open;
+    in property <int> edit-dialog-id;
+    in-out property <string> edit-dialog-name;
+    in-out property <string> edit-dialog-link;
+    // The config came from a link (else the field is empty and a link replaces it).
+    in property <bool> edit-dialog-has-link;
+    in property <string> edit-dialog-error;
 
     // OpenVPN sign-in: Rust opens it when a config needs a username and password.
     in-out property <bool> creds-dialog-open;
@@ -240,10 +254,15 @@ export global AppState {
     callback select-config(int);
     callback remove-config(int);
     callback filter-changed(int);
-    // after `group-configs` changed
+    // after `group-configs` or `sort-by-latency` changed
     callback grouping-changed();
     // a group heading was clicked: its name
     callback toggle-group(string);
+    // a group's move buttons: its name, -1 = up, 1 = down
+    callback move-group(string, int);
+    // a manual config's edit button: opens the edit dialog
+    callback edit-config(int);
+    callback save-config();
     callback test-latency();
     callback add-links(string);
     callback submit-credentials();

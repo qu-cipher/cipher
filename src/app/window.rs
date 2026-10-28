@@ -7,6 +7,8 @@ use crate::AppWindow;
 use crate::store::WindowSize;
 use slint::{ComponentHandle, LogicalSize, PhysicalPosition};
 use std::cell::Cell;
+#[cfg(not(target_os = "android"))]
+use {slint::Weak, std::time::Duration};
 
 /// The smallest size the layout allows (`min-width` / `min-height` in main-window.slint).
 const MIN_WIDTH: u32 = 400;
@@ -23,6 +25,8 @@ thread_local! {
 
 /// Before the first show: the size from the last run.
 pub(super) fn restore(ui: &AppWindow, saved: Option<WindowSize>) {
+    #[cfg(not(target_os = "android"))]
+    apply_min_size(ui);
     // A phone's window fills the screen.
     let Some(saved) = saved.filter(|_| !cfg!(target_os = "android")) else { return };
     let size = LogicalSize::new(saved.width.clamp(MIN_WIDTH, MAX) as f32, saved.height.clamp(MIN_HEIGHT, MAX) as f32);
@@ -78,6 +82,35 @@ pub(super) fn show(ui: &AppWindow) {
     }
     let _ = ui.show();
     window.set_minimized(false);
+    #[cfg(not(target_os = "android"))]
+    if destroyed_on_hide() {
+        apply_min_size(ui);
+    }
+}
+
+/// Sets the window's minimum size (main-window.slint's) on the system window, once it exists.
+/// Slint's own falls short twice: the window it recreates on show (Wayland) comes without one,
+/// since Slint only sends size limits when they change, so it could be shrunk until the layout
+/// broke; and with a UI scale set it scales the limit twice (too large). Also after a UI scale change.
+#[cfg(not(target_os = "android"))]
+pub(super) fn apply_min_size(ui: &AppWindow) {
+    set_min_size(ui.as_weak(), 100);
+}
+
+/// The system window appears a moment after `show()`: retries every 50 ms for up to `tries`.
+#[cfg(not(target_os = "android"))]
+fn set_min_size(weak: Weak<AppWindow>, tries: u32) {
+    use slint::winit_030::{WinitWindowAccessor, winit::dpi::PhysicalSize};
+    let Some(ui) = weak.upgrade() else { return };
+    // In Slint's scale factor, which a UI scale setting overrides; winit doesn't know it.
+    let scale = ui.window().scale_factor();
+    let min = PhysicalSize::new((MIN_WIDTH as f32 * scale).ceil() as u32, (MIN_HEIGHT as f32 * scale).ceil() as u32);
+    if ui.window().with_winit_window(|window| window.set_min_inner_size(Some(min))).is_some() {
+        return;
+    }
+    if tries > 0 {
+        slint::Timer::single_shot(Duration::from_millis(50), move || set_min_size(weak, tries - 1));
+    }
 }
 
 /// Whether hiding destroys the window, as Slint does on Wayland (which can't hide one).

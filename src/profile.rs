@@ -102,6 +102,18 @@ impl Profile {
         }
     }
 
+    pub fn set_name(&mut self, new: String) {
+        match self {
+            Profile::Proxy { name, .. }
+            | Profile::WireGuard { name, .. }
+            | Profile::OpenVpn { name, .. }
+            | Profile::Psiphon { name, .. }
+            | Profile::Xray { name, .. }
+            | Profile::Plugin { name, .. }
+            | Profile::Custom { name, .. } => *name = new,
+        }
+    }
+
     /// Short protocol label for the UI.
     pub fn protocol(&self) -> &str {
         match self {
@@ -264,6 +276,11 @@ pub struct Settings {
     pub ui_scale: Option<u16>,
     /// Desktop: closing the window hides it to the tray (the connection keeps running).
     pub close_to_tray: bool,
+    /// Sort the Configs list by the last latency test (fastest first; within groups when grouped).
+    pub sort_by_latency: bool,
+    /// The user's order of the Configs list's groups (`Profile::group`); empty = the built-in order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub group_order: Vec<String>,
 }
 
 impl Settings {
@@ -290,6 +307,8 @@ impl Default for Settings {
             udp_noise: false,
             ui_scale: None,
             close_to_tray: true,
+            sort_by_latency: false,
+            group_order: Vec::new(),
         }
     }
 }

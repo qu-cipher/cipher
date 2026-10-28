@@ -331,6 +331,89 @@ fn routing_screenshots() {
     plugin_frames(&ui, &_ctx, &d);
 }
 
+/// Editing a manual config, sorting by ping and moving a group. Never connects:
+/// `CIPHER_SCREENSHOTS=<dir> cargo test config_list_screenshots -- --ignored`
+#[cfg(not(phone_ui))]
+#[test]
+#[ignore = "visual check: CIPHER_SCREENSHOTS=<dir> cargo test config_list_screenshots -- --ignored"]
+fn config_list_screenshots() {
+    let (ui, ctx, _monitor, d) = start();
+    let state = ui.global::<AppState>();
+    // A reachable "server" (answers TCP) and a closed port (fails at once).
+    let open = serve_http("ok");
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let uuid = "bf000d23-0752-40b4-affe-68f7707a9661";
+    state.invoke_add_links(
+        format!(
+            "trojan://pw@127.0.0.1:{closed}#Trojan down\n\
+             trojan://pw@127.0.0.1:{open}#Trojan up\n\
+             vless://{uuid}@127.0.0.1:{open}?security=tls#VLESS up\n\
+             hy2://pw@h.example.com:443#Hysteria"
+        )
+        .into(),
+    );
+    d.pump(300);
+    d.shot("c01-list");
+    let id_of = |name: &str| state.get_configs().iter().find(|c| c.name == name).map(|c| c.id).unwrap();
+
+    // Edit: the dialog shows the link it was added from.
+    state.invoke_edit_config(id_of("Trojan down"));
+    d.pump(300);
+    assert!(state.get_edit_dialog_open());
+    assert_eq!(state.get_edit_dialog_link(), format!("trojan://pw@127.0.0.1:{closed}#Trojan down"));
+    d.shot("c02-edit-dialog");
+
+    // A bad link keeps the dialog open with the reason.
+    state.set_edit_dialog_link("vless://broken".into());
+    state.invoke_save_config();
+    d.pump(100);
+    assert!(state.get_edit_dialog_open());
+    assert_ne!(state.get_edit_dialog_error(), "");
+    d.shot("c03-edit-error");
+
+    // A new link and a new name.
+    let edited = id_of("Trojan down");
+    state.set_edit_dialog_name("My server".into());
+    state.set_edit_dialog_link(format!("trojan://secret@127.0.0.1:{closed}?sni=example.com#Whatever").into());
+    state.invoke_save_config();
+    d.pump(300);
+    assert!(!state.get_edit_dialog_open());
+    {
+        let store = ctx.store.lock().unwrap();
+        let entry = store.entry(edited as u64).unwrap();
+        assert_eq!(entry.profile.name(), "My server");
+        assert!(entry.link.as_deref().unwrap().contains("secret@"));
+    }
+    d.shot("c04-edited");
+
+    // Sort by ping: within a group the reachable one comes first.
+    state.set_sort_by_latency(true);
+    state.invoke_grouping_changed();
+    state.invoke_test_latency();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.get_testing() && Instant::now() < deadline {
+        d.pump(50);
+    }
+    d.pump(100);
+    let names: Vec<String> = state.get_configs().iter().map(|c| c.name.to_string()).collect();
+    let at = |name: &str| names.iter().position(|n| n == name).unwrap();
+    assert!(at("Trojan up") < at("My server"), "{names:?}");
+    d.shot("c05-sorted-by-ping");
+
+    // Move the Trojan group to the top.
+    state.invoke_move_group("Trojan".into(), -1);
+    d.pump(100);
+    let headers: Vec<String> = state.get_configs().iter().filter(|c| c.header).map(|c| c.name.to_string()).collect();
+    assert_eq!(headers.first().map(String::as_str), Some("Trojan"), "{headers:?}");
+    d.hover(600.0, 150.0);
+    d.shot("c06-group-moved");
+
+    // Both are saved.
+    let saved = crate::store::Store::load().settings;
+    assert!(saved.sort_by_latency);
+    assert_eq!(saved.group_order.first().map(String::as_str), Some("Trojan"));
+}
+
 /// The window resized and maximized. Never connects: `CIPHER_SCREENSHOTS=<dir> cargo test resize_screenshots -- --ignored`
 /// (frames are named by size, e.g. `s1-configs-1600x900.rgba`).
 #[cfg(not(phone_ui))]
@@ -620,7 +703,7 @@ fn screenshots() {
     .unwrap();
     {
         let mut store = _ctx.store.lock().unwrap();
-        let ids = store.add_profiles(vec![crate::import::import_openvpn(&ovpn).unwrap()]);
+        let ids = store.add_profiles(vec![(crate::import::import_openvpn(&ovpn).unwrap(), None)]);
         store.selected = Some(ids[0]);
     }
     refresh_all(&ui, &_ctx);
@@ -644,7 +727,7 @@ fn screenshots() {
     .unwrap();
     {
         let mut store = _ctx.store.lock().unwrap();
-        let ids = store.add_profiles(vec![crate::import::import_openvpn(&login_ovpn).unwrap()]);
+        let ids = store.add_profiles(vec![(crate::import::import_openvpn(&login_ovpn).unwrap(), None)]);
         store.selected = Some(ids[0]);
     }
     refresh_all(&ui, &_ctx);
@@ -685,7 +768,7 @@ fn screenshots() {
         base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, "aes-256-gcm:cipher-test"));
     {
         let mut store = _ctx.store.lock().unwrap();
-        let ids = store.add_profiles(vec![crate::import::parse_link(&ss).unwrap()]);
+        let ids = store.add_profiles(vec![(crate::import::parse_link(&ss).unwrap(), None)]);
         store.selected = Some(ids[0]);
         // Localhost counts as LAN: without this the request would skip the tunnel.
         store.settings.bypass_lan = false;

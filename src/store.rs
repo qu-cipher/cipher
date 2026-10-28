@@ -21,6 +21,9 @@ pub struct Entry {
     /// A transport plugin this config runs through (see `crate::plugin`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<TransportUse>,
+    /// The share link a manual config was added from, shown when editing it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +106,7 @@ impl Store {
 
         if let Ok(Old { settings: OldSettings { psiphon: OldPsiphon { network: Some(network) } } }) = serde_json::from_str(text) {
             let name = "Psiphon (imported config)".into();
-            self.add_profiles(vec![Profile::Psiphon { name, source: PsiphonSource::Network(network) }]);
+            self.add_profiles(vec![(Profile::Psiphon { name, source: PsiphonSource::Network(network) }, None)]);
         }
         // Android has no system proxy setting to change.
         #[cfg(target_os = "android")]
@@ -120,15 +123,23 @@ impl Store {
     }
 
     fn entries_from(&mut self, profiles: Vec<Profile>) -> Vec<Entry> {
-        profiles.into_iter().map(|profile| Entry { id: self.next_id(), profile, transport: None }).collect()
+        profiles.into_iter().map(|profile| Entry { id: self.next_id(), profile, transport: None, link: None }).collect()
     }
 
-    /// Adds manual configs and returns their ids.
-    pub fn add_profiles(&mut self, profiles: Vec<Profile>) -> Vec<u64> {
-        let entries = self.entries_from(profiles);
+    /// Adds manual configs (each with the share link it came from, if any) and returns their ids.
+    pub fn add_profiles(&mut self, profiles: Vec<(Profile, Option<String>)>) -> Vec<u64> {
+        let entries: Vec<Entry> = profiles
+            .into_iter()
+            .map(|(profile, link)| Entry { id: self.next_id(), profile, transport: None, link })
+            .collect();
         let ids = entries.iter().map(|e| e.id).collect();
         self.manual.extend(entries);
         ids
+    }
+
+    /// A manual config (subscription configs are replaced on every update, so they aren't edited).
+    pub fn manual_mut(&mut self, id: u64) -> Option<&mut Entry> {
+        self.manual.iter_mut().find(|e| e.id == id)
     }
 
     pub fn add_subscription(&mut self, url: &str, content: Subscription) -> u64 {
@@ -284,7 +295,7 @@ mod tests {
     #[test]
     fn removing_selected_entry_clears_selection() {
         let mut store = Store::default();
-        let ids = store.add_profiles(subscription(&["A", "B"]).profiles);
+        let ids = store.add_profiles(subscription(&["A", "B"]).into_imported());
         store.selected = Some(ids[0]);
 
         store.remove_entry(ids[1]);
@@ -312,7 +323,7 @@ mod tests {
     #[test]
     fn state_round_trips_through_json() {
         let mut store = Store::default();
-        store.add_profiles(subscription(&["A"]).profiles);
+        store.add_profiles(subscription(&["A"]).into_imported());
         store.add_subscription("https://s.example.com", subscription(&["B"]));
 
         let loaded: Store = serde_json::from_str(&serde_json::to_string(&store).unwrap()).unwrap();
@@ -321,7 +332,7 @@ mod tests {
 
         // New ids keep counting after a reload.
         let mut loaded = loaded;
-        let ids = loaded.add_profiles(subscription(&["C"]).profiles);
+        let ids = loaded.add_profiles(subscription(&["C"]).into_imported());
         assert_eq!(ids, [4]);
     }
 }

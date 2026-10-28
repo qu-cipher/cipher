@@ -8,6 +8,7 @@ export component ConfigItem inherits Rectangle {
     in property <bool> show-source;
 
     callback clicked();
+    callback edit();
     callback remove();
 
     private property <color> latency-color: data.latency-level == 1 ? Theme.connected
@@ -82,6 +83,16 @@ export component ConfigItem inherits Rectangle {
             font-weight: 600;
             vertical-alignment: center;
             color: root.latency-color;
+        }
+
+        // Manual configs only: subscription configs come back as they were on every update.
+        if data.removable: VerticalLayout {
+            alignment: center;
+            IconButton {
+                icon: @image-url("../../assets/icons/MdiPencil.svg");
+                size: 14px;
+                clicked => { root.edit(); }
+            }
         }
 
         if data.removable: VerticalLayout {

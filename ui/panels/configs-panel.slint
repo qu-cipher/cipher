@@ -53,6 +53,19 @@ export component ConfigsPanel inherits VerticalLayout {
         VerticalLayout {
             alignment: center;
             IconButton {
+                icon: @image-url("../../assets/icons/MdiSortAscending.svg");
+                icon-color: AppState.sort-by-latency ? Theme.accent : Theme.text-muted;
+                hover-color: AppState.sort-by-latency ? Theme.accent : Theme.text;
+                clicked => {
+                    AppState.sort-by-latency = !AppState.sort-by-latency;
+                    AppState.grouping-changed();
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            IconButton {
                 icon: @image-url("../../assets/icons/MdiFormatListGroup.svg");
                 icon-color: AppState.group-configs ? Theme.accent : Theme.text-muted;
                 hover-color: AppState.group-configs ? Theme.accent : Theme.text;
@@ -89,6 +102,7 @@ export component ConfigsPanel inherits VerticalLayout {
             if config.header: GroupHeader {
                 data: config;
                 clicked => { AppState.toggle-group(config.name); }
+                move(step) => { AppState.move-group(config.name, step); }
             }
 
             if !config.header: ConfigItem {
@@ -96,6 +110,7 @@ export component ConfigsPanel inherits VerticalLayout {
                 selected: config.id == AppState.selected-id;
                 show-source: AppState.filter-index == 0;
                 clicked => { AppState.select-config(config.id); }
+                edit => { AppState.edit-config(config.id); }
                 remove => { AppState.remove-config(config.id); }
             }
         }

@@ -79,7 +79,7 @@ struct Shared {
     filter: Mutex<Filter>,
     latency: Mutex<HashMap<u64, Latency>>,
     /// Collapsed groups in the Configs list (this session only).
-    collapsed: Mutex<HashSet<&'static str>>,
+    collapsed: Mutex<HashSet<String>>,
     updating: Mutex<HashSet<u64>>,
     notice_seq: AtomicU64,
     /// The config the sign-in dialog is for, and whether to connect after it.
@@ -198,6 +198,8 @@ fn ui_scale_changed(ui: &AppWindow, ctx: &Ctx) {
     let scale_factor = f32::from(percent) / 100.0;
     let _ = window.dispatch_event_with_result(slint::platform::WindowEvent::ScaleFactorChanged { scale_factor });
     window.set_size(size.to_physical(scale_factor));
+    #[cfg(not(target_os = "android"))]
+    window::apply_min_size(ui);
 }
 
 /// Registers an `AppState` callback that gets the window and the shared state.
@@ -237,15 +239,17 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
         refresh_configs(&ui, ctx);
     });
     on!(ui, ctx, on_toggle_group, |ui, ctx, name: SharedString| {
-        let Some(group) = GROUP_ORDER.iter().find(|g| **g == name.as_str()) else { return };
         {
             let mut collapsed = ctx.collapsed.lock().unwrap();
-            if !collapsed.remove(group) {
-                collapsed.insert(group);
+            if !collapsed.remove(name.as_str()) {
+                collapsed.insert(name.into());
             }
         }
         refresh_configs(&ui, ctx);
     });
+    on!(ui, ctx, on_move_group, |ui, ctx, name: SharedString, step: i32| move_group(&ui, ctx, &name, step));
+    on!(ui, ctx, on_edit_config, |ui, ctx, id: i32| edit_config(&ui, ctx, id as u64));
+    on!(ui, ctx, on_save_config, |ui, ctx| save_config(&ui, ctx));
     on!(ui, ctx, on_test_latency, |ui, ctx| test_latency(&ui, ctx));
     on!(ui, ctx, on_add_links, |ui, ctx, text: SharedString| add_links(&ui, ctx, &text));
     on!(ui, ctx, on_import_files, |ui, ctx| import_files(&ui, ctx));
@@ -401,7 +405,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
         Filter::Subscription(id) => 2 + store.subscriptions.iter().position(|s| s.id == id).unwrap_or(0),
     };
 
-    let mut rows: Vec<(&Profile, ConfigData)> = store
+    let mut rows: Vec<(&Profile, u64, ConfigData)> = store
         .all_entries()
         .filter(|(source, _)| match *filter {
             Filter::All => true,
@@ -410,7 +414,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
         })
         .map(|(source, entry)| {
             let (latency, level) = latency_display(latency.get(&entry.id).copied());
-            (&entry.profile, ConfigData {
+            (&entry.profile, entry.id, ConfigData {
                 id: entry.id as i32,
                 name: entry.profile.name().into(),
                 protocol: entry.profile.protocol().into(),
@@ -422,8 +426,13 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
             })
         })
         .collect();
+    if store.settings.sort_by_latency {
+        // Stable: untested configs keep their order.
+        rows.sort_by_key(|(_, id, _)| latency_rank(latency.get(id).copied()));
+    }
+    let mut rows: Vec<(&Profile, ConfigData)> = rows.into_iter().map(|(profile, _, row)| (profile, row)).collect();
     let rows = match store.settings.group_configs {
-        true => grouped(&mut rows, &ctx.collapsed.lock().unwrap()),
+        true => grouped(&mut rows, &group_order(&store.settings), &ctx.collapsed.lock().unwrap()),
         false => rows.into_iter().map(|(_, row)| row).collect(),
     };
 
@@ -446,13 +455,15 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
     plugins::refresh_transport(&state, &store);
 }
 
-/// Sorts rows into protocol groups, each under a heading row; collapsed groups keep only the heading.
-fn grouped(rows: &mut [(&Profile, ConfigData)], collapsed: &HashSet<&str>) -> Vec<ConfigData> {
-    let rank = |group: &str| GROUP_ORDER.iter().position(|g| *g == group).unwrap_or(GROUP_ORDER.len());
-    rows.sort_by_key(|(profile, _)| rank(profile.group()));
+/// Sorts rows into protocol groups in `order` (others after them, by name), each under a heading
+/// row; collapsed groups keep only the heading. Stable: rows keep their order within a group.
+fn grouped(rows: &mut [(&Profile, ConfigData)], order: &[String], collapsed: &HashSet<String>) -> Vec<ConfigData> {
+    let rank = |group: &str| order.iter().position(|g| g == group).unwrap_or(order.len());
+    rows.sort_by(|(a, _), (b, _)| (rank(a.group()), a.group()).cmp(&(rank(b.group()), b.group())));
 
+    let chunks: Vec<_> = rows.chunk_by(|(a, _), (b, _)| a.group() == b.group()).collect();
     let mut out = Vec::new();
-    for chunk in rows.chunk_by(|(a, _), (b, _)| a.group() == b.group()) {
+    for (i, chunk) in chunks.iter().enumerate() {
         let group = chunk[0].0.group();
         let is_collapsed = collapsed.contains(group);
         out.push(ConfigData {
@@ -462,6 +473,8 @@ fn grouped(rows: &mut [(&Profile, ConfigData)], collapsed: &HashSet<&str>) -> Ve
             header: true,
             count: chunk.len() as i32,
             collapsed: is_collapsed,
+            first: i == 0,
+            last: i == chunks.len() - 1,
             ..Default::default()
         });
         if !is_collapsed {
@@ -471,8 +484,56 @@ fn grouped(rows: &mut [(&Profile, ConfigData)], collapsed: &HashSet<&str>) -> Ve
     out
 }
 
+/// The groups' order: the user's, then the built-in one for groups they haven't placed.
+fn group_order(settings: &Settings) -> Vec<String> {
+    let mut order = settings.group_order.clone();
+    for group in GROUP_ORDER {
+        if !order.iter().any(|g| g == group) {
+            order.push(group.to_owned());
+        }
+    }
+    order
+}
+
+/// `order` with `group` moved one place up (`step` < 0) or down among the `shown` groups (the
+/// list's headings, in order), or `None` when it can't move. Groups not in `order` yet (a core
+/// plugin's protocols) are added where they're shown.
+fn moved_group(mut order: Vec<String>, shown: &[String], group: &str, step: i32) -> Option<Vec<String>> {
+    let at = shown.iter().position(|g| g == group)?;
+    let neighbor = shown.get(at.checked_add_signed(step.signum() as isize)?)?;
+    for g in shown {
+        if !order.contains(g) {
+            order.push(g.clone());
+        }
+    }
+    order.retain(|g| g != group);
+    let index = order.iter().position(|g| g == neighbor)? + usize::from(step > 0);
+    order.insert(index, group.to_owned());
+    Some(order)
+}
+
+fn move_group(ui: &AppWindow, ctx: &Ctx, group: &str, step: i32) {
+    let shown: Vec<String> = ui.global::<AppState>().get_configs().iter().filter(|r| r.header).map(|r| r.name.into()).collect();
+    {
+        let mut store = ctx.store.lock().unwrap();
+        let Some(order) = moved_group(group_order(&store.settings), &shown, group, step) else { return };
+        store.settings.group_order = order;
+        save(ui, ctx, &store);
+    }
+    refresh_configs(ui, ctx);
+}
+
 fn source_label(source: Option<&store::StoredSubscription>) -> &str {
     source.map_or("Added manually", |s| s.name.as_str())
+}
+
+/// Sort key for "sort by ping": fastest first, then untested, then failed.
+fn latency_rank(latency: Option<Latency>) -> (u8, u128) {
+    match latency {
+        Some(Latency::Ms(ms)) => (0, ms),
+        None | Some(Latency::Testing) => (1, 0),
+        Some(Latency::Failed) => (2, 0),
+    }
 }
 
 fn latency_display(latency: Option<Latency>) -> (String, i32) {
@@ -513,6 +574,71 @@ fn remove_config(ui: &AppWindow, ctx: &Ctx, id: u64) {
     refresh_configs(ui, ctx);
 }
 
+/// Opens the edit dialog for a manual config: its name and the link it came from.
+fn edit_config(ui: &AppWindow, ctx: &Ctx, id: u64) {
+    let mut store = ctx.store.lock().unwrap();
+    let Some(entry) = store.manual_mut(id) else { return };
+    let link = entry.link.clone().or_else(|| match &entry.profile {
+        Profile::Plugin { link, .. } => link.clone(),
+        _ => None,
+    });
+    let state = ui.global::<AppState>();
+    state.set_edit_dialog_id(id as i32);
+    state.set_edit_dialog_name(entry.profile.name().into());
+    state.set_edit_dialog_has_link(link.is_some());
+    state.set_edit_dialog_link(link.unwrap_or_default().into());
+    state.set_edit_dialog_error(SharedString::new());
+    state.set_edit_dialog_open(true);
+}
+
+/// Saves the edit dialog: a changed link replaces the config, then the name is applied.
+fn save_config(ui: &AppWindow, ctx: &Ctx) {
+    let state = ui.global::<AppState>();
+    let id = state.get_edit_dialog_id() as u64;
+    let name = state.get_edit_dialog_name().trim().to_owned();
+    let link = state.get_edit_dialog_link().trim().to_owned();
+
+    let replaced = {
+        let mut store = ctx.store.lock().unwrap();
+        let Some(entry) = store.manual_mut(id) else { return };
+        let old_link = entry.link.clone().or_else(|| match &entry.profile {
+            Profile::Plugin { link, .. } => link.clone(),
+            _ => None,
+        });
+        let replaced = !link.is_empty() && Some(&link) != old_link.as_ref();
+        if replaced {
+            let parsed = import::parse_links(&link);
+            let profile = match <[Profile; 1]>::try_from(parsed.profiles) {
+                Ok([profile]) => profile,
+                Err(profiles) if profiles.is_empty() => {
+                    let reason = parsed.skipped.first().cloned().unwrap_or_else(|| "Not a share link".into());
+                    state.set_edit_dialog_error(reason.into());
+                    return;
+                }
+                Err(_) => {
+                    state.set_edit_dialog_error("Paste one link: this edits a single config".into());
+                    return;
+                }
+            };
+            entry.profile = profile;
+            entry.link = Some(link);
+        }
+        if !name.is_empty() {
+            entry.profile.set_name(name);
+        }
+        save(ui, ctx, &store);
+        replaced && store.selected == Some(id)
+    };
+    ctx.latency.lock().unwrap().remove(&id);
+    state.set_edit_dialog_open(false);
+    refresh_configs(ui, ctx);
+
+    // The running config changed: reconnect with the new settings.
+    if replaced && *ctx.state.lock().unwrap() == ConnectionState::Connected {
+        connect(ui, ctx);
+    }
+}
+
 fn filter_changed(ui: &AppWindow, ctx: &Ctx, index: i32) {
     let filter = match index {
         0 => Filter::All,
@@ -527,7 +653,7 @@ fn filter_changed(ui: &AppWindow, ctx: &Ctx, index: i32) {
 }
 
 /// Adds imported profiles as manual configs and selects the first one if nothing is selected.
-fn add_manual(ui: &AppWindow, ctx: &Ctx, profiles: Vec<Profile>) -> Vec<u64> {
+fn add_manual(ui: &AppWindow, ctx: &Ctx, profiles: Vec<(Profile, Option<String>)>) -> Vec<u64> {
     let ids = {
         let mut store = ctx.store.lock().unwrap();
         let ids = store.add_profiles(profiles);
@@ -557,11 +683,12 @@ fn add_links(ui: &AppWindow, ctx: &Ctx, text: &str) {
         return;
     }
 
-    let added = add_manual(ui, ctx, parsed.profiles).len();
+    let skipped = parsed.skipped.clone();
+    let added = add_manual(ui, ctx, parsed.into_imported()).len();
     state.set_links_dialog_open(false);
     state.set_links_dialog_text(SharedString::new());
     state.set_links_dialog_error(SharedString::new());
-    notify(ui, ctx, summary("Added", added, &parsed.skipped), !parsed.skipped.is_empty());
+    notify(ui, ctx, summary("Added", added, &skipped), !skipped.is_empty());
 }
 
 // TODO(android): the system file picker, through the Java side.
@@ -616,24 +743,25 @@ fn import_files(ui: &AppWindow, ctx: &Ctx) {
 
 // Unused on Android until it gets a file picker.
 #[cfg_attr(target_os = "android", allow(dead_code))]
-fn import_file(path: &Path) -> Result<Vec<Profile>, ImportError> {
+/// The configs in a file, each with its share link if it came from one.
+fn import_file(path: &Path) -> Result<Vec<(Profile, Option<String>)>, ImportError> {
     let extension = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase());
     match extension.as_deref() {
-        Some("ovpn") => Ok(vec![import::import_openvpn(path)?]),
+        Some("ovpn") => Ok(vec![(import::import_openvpn(path)?, None)]),
         Some("conf") => {
             let name = path.file_stem().map_or("WireGuard".into(), |s| s.to_string_lossy().into_owned());
-            Ok(vec![import::parse_wireguard_conf(&std::fs::read_to_string(path)?, &name)?])
+            Ok(vec![(import::parse_wireguard_conf(&std::fs::read_to_string(path)?, &name)?, None)])
         }
         _ => {
             let text = std::fs::read_to_string(path)?;
             if import::psiphon::looks_like_network(&text) {
                 let name = path.file_stem().map_or("Psiphon network".into(), |s| s.to_string_lossy().into_owned());
-                return Ok(vec![import::psiphon::parse_network_profile(&text, &name)?]);
+                return Ok(vec![(import::psiphon::parse_network_profile(&text, &name)?, None)]);
             }
             let parsed = import::parse_links(&text);
             match parsed.profiles.is_empty() {
                 true => Err(ImportError::Empty),
-                false => Ok(parsed.profiles),
+                false => Ok(parsed.into_imported()),
             }
         }
     }
@@ -856,7 +984,13 @@ fn test_latency(ui: &AppWindow, ctx: &Ctx) {
             let _ = worker.join();
         }
 
-        on_ui(&weak, &ctx, |ui, _| ui.global::<AppState>().set_testing(false));
+        on_ui(&weak, &ctx, |ui, ctx| {
+            ui.global::<AppState>().set_testing(false);
+            // Results stream into the rows in place; sort once they're all in.
+            if ctx.store.lock().unwrap().settings.sort_by_latency {
+                refresh_configs(ui, ctx);
+            }
+        });
     });
 }
 
@@ -1151,6 +1285,7 @@ fn load_settings(ui: &AppWindow, ctx: &Ctx) {
     state.set_tls_fragment(settings.tls_fragment);
     state.set_udp_noise(settings.udp_noise);
     state.set_group_configs(settings.group_configs);
+    state.set_sort_by_latency(settings.sort_by_latency);
     state.set_close_to_tray(settings.close_to_tray);
     state.set_ui_scale(UI_SCALES.iter().position(|s| *s == settings.ui_scale).unwrap_or(0) as i32);
     plugins::refresh_cores(&state, &settings.core);
@@ -1183,6 +1318,9 @@ fn settings_changed(ui: &AppWindow, ctx: &Ctx) {
         udp_noise: state.get_udp_noise(),
         group_configs: state.get_group_configs(),
         close_to_tray: state.get_close_to_tray(),
+        sort_by_latency: state.get_sort_by_latency(),
+        // Changed through `move_group`.
+        group_order: store.settings.group_order.clone(),
         ui_scale: UI_SCALES.get(state.get_ui_scale() as usize).copied().flatten(),
         core: plugins::core_choices(&store.settings.core).into_iter().nth(state.get_core() as usize).map(|(core, _)| core).unwrap_or_default(),
         // Rules and presets are edited through their own callbacks.
@@ -1425,7 +1563,8 @@ mod tests {
         let mut rows: Vec<_> = profiles.iter().map(|p| (p, row(p))).collect();
 
         let names = |rows: &[ConfigData]| rows.iter().map(|r| (r.header, r.name.to_string(), r.count)).collect::<Vec<_>>();
-        let out = grouped(&mut rows, &HashSet::new());
+        let order = group_order(&Settings::default());
+        let out = grouped(&mut rows, &order, &HashSet::new());
         assert_eq!(names(&out), [
             (true, "VLESS".into(), 1), (false, "V1".into(), 0),
             (true, "Trojan".into(), 2), (false, "T1".into(), 0), (false, "T2".into(), 0),
@@ -1433,9 +1572,62 @@ mod tests {
         ]);
         assert_eq!(out[2].protocol, "trojan");
 
-        let out = grouped(&mut rows, &HashSet::from(["Psiphon"]));
+        let out = grouped(&mut rows, &order, &HashSet::from(["Psiphon".to_owned()]));
         assert_eq!(out.last().map(|r| (r.header, r.collapsed)), Some((true, true)));
         assert_eq!(out.len(), 6);
+    }
+
+    #[test]
+    fn moves_groups_among_the_shown_ones() {
+        let order = group_order(&Settings::default());
+        let shown: Vec<String> = ["VLESS", "Trojan", "Psiphon", "mieru"].map(String::from).into();
+        let rank = |order: &[String], g: &str| order.iter().position(|o| o == g).unwrap();
+
+        // Up past Trojan; groups that aren't shown (VMess, Shadowsocks, …) don't count as a step.
+        let moved = moved_group(order.clone(), &shown, "Psiphon", -1).unwrap();
+        assert!(rank(&moved, "Psiphon") < rank(&moved, "Trojan"));
+        assert!(rank(&moved, "VLESS") < rank(&moved, "Psiphon"));
+        // Down past the core plugin's group, which joins the order.
+        let shown: Vec<String> = ["VLESS", "Psiphon", "Trojan", "mieru"].map(String::from).into();
+        let moved = moved_group(moved, &shown, "Trojan", 1).unwrap();
+        assert!(rank(&moved, "mieru") < rank(&moved, "Trojan"));
+        assert_eq!(moved.len(), order.len() + 1);
+        // Nowhere to go.
+        assert_eq!(moved_group(order.clone(), &shown, "VLESS", -1), None);
+        assert_eq!(moved_group(order.clone(), &shown, "mieru", 1), None);
+        assert_eq!(moved_group(order, &shown, "WireGuard", 1), None);
+    }
+
+    #[test]
+    fn groups_follow_the_saved_order_and_keep_unknown_ones_together() {
+        let profiles: Vec<Profile> = [
+            Profile::Custom { name: "M1".into(), outbound: serde_json::json!({"type": "mieru"}) },
+            Profile::Custom { name: "J1".into(), outbound: serde_json::json!({"type": "juicity"}) },
+            import::parse_link("trojan://pw@a.example.com:443#T1").unwrap(),
+            Profile::Custom { name: "M2".into(), outbound: serde_json::json!({"type": "mieru"}) },
+            import::parse_link("vless://bf000d23-0752-40b4-affe-68f7707a9661@b.example.com:443#V1").unwrap(),
+        ]
+        .into();
+        let row = |p: &Profile| ConfigData { name: p.name().into(), protocol: p.protocol().into(), ..Default::default() };
+        let mut rows: Vec<_> = profiles.iter().map(|p| (p, row(p))).collect();
+        let settings = Settings { group_order: vec!["Trojan".into()], ..Default::default() };
+
+        let out = grouped(&mut rows, &group_order(&settings), &HashSet::new());
+        let headers: Vec<_> = out.iter().filter(|r| r.header).map(|r| (r.name.to_string(), r.count, r.first, r.last)).collect();
+        assert_eq!(headers, [
+            ("Trojan".into(), 1, true, false),
+            ("VLESS".into(), 1, false, false),
+            ("juicity".into(), 1, false, false),
+            ("mieru".into(), 2, false, true),
+        ]);
+    }
+
+    #[test]
+    fn ranks_latency_fastest_first() {
+        let mut results = [Some(Latency::Failed), None, Some(Latency::Ms(300)), Some(Latency::Testing), Some(Latency::Ms(40))];
+        results.sort_by_key(|l| latency_rank(*l));
+        let ranks: Vec<_> = results.iter().map(|l| latency_rank(*l)).collect();
+        assert_eq!(ranks, [(0, 40), (0, 300), (1, 0), (1, 0), (2, 0)]);
     }
 
     #[test]
