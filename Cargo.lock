@@ -776,6 +776,7 @@ dependencies = [
  "base64",
  "dirs",
  "embed-resource",
+ "i-slint-core",
  "jni 0.22.4",
  "libc",
  "percent-encoding",

@@ -22,6 +22,8 @@ CIPHER_SCREENSHOTS=/tmp/shots cargo test screenshots -- --ignored --nocapture   
 CIPHER_UI=phone cargo run     # preview the phone (Android) layout on the desktop
 android/build.sh [--debug]    # Android APK (arm64) → target/android/cipher-<ver>-arm64.apk
 CIPHER_UI=phone CIPHER_SCREENSHOTS=/tmp/shots cargo test phone_screenshots -- --ignored   # phone frames (400x820)
+CIPHER_UI=phone CIPHER_SCREENSHOTS=/tmp/shots cargo test phone_touch -- --ignored   # finger input as Android sends it
+                              # (InternalEvent::Touch via the i-slint-core dev-dep, pinned =slint's version: bump both together)
 ```
 **Releases:** `.github/workflows/release.yml`, on a `v*` tag (must equal the Cargo.toml version) or manual run.
 It runs `cargo test --locked` and then a release build on ubuntu-22.04 + windows-latest (MSVC), plus an `android` job

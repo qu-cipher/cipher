@@ -48,3 +48,5 @@ libc = "0.2.191"
 [dev-dependencies]
 # Headless screenshots in tests (src/app/screenshots.rs)
 slint = { version = "1.18.1", features = ["software-renderer-systemfonts", "software-renderer-path"] }
+# Touch input as Android delivers it (not public Slint API, so pinned to slint's exact version)
+i-slint-core = "=1.18.1"

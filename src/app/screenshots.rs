@@ -129,6 +129,27 @@ impl Driver {
         self.pump(60);
     }
 
+    #[cfg(phone_ui)]
+    /// A finger, the way Android's backend delivers it (unlike the mouse, it can scroll lists).
+    fn touch(&self, phase: i_slint_core::input::TouchPhase, x: f32, y: f32) {
+        let position = i_slint_core::lengths::LogicalPoint::new(x, y);
+        self.window.dispatch_event(WindowEvent::internal(slint::platform::InternalEvent::Touch { id: 0, position, phase }));
+        self.pump(20);
+    }
+
+    #[cfg(phone_ui)]
+    /// A finger put down at (x, y), held for `hold_ms`, moved down by each of `steps`, then lifted.
+    fn swipe(&self, x: f32, y: f32, hold_ms: u64, steps: &[f32]) {
+        use i_slint_core::input::TouchPhase;
+        self.touch(TouchPhase::Started, x, y);
+        self.pump(hold_ms);
+        for dy in steps {
+            self.touch(TouchPhase::Moved, x, y + dy);
+        }
+        self.touch(TouchPhase::Ended, x, y + steps.last().copied().unwrap_or(0.0));
+        self.pump(200);
+    }
+
     fn hover(&self, x: f32, y: f32) {
         self.window.dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(x, y) });
         self.pump(150);
@@ -913,4 +934,73 @@ fn phone_screenshots() {
     state.set_links_dialog_open(true);
     d.pump(300);
     d.shot("p07-add-dialog");
+}
+
+/// The phone layout with a finger (touch events, as on Android): pull to connect, and dragging
+/// group headings, which needs a hold first since a swipe scrolls the list. Never connects.
+#[cfg(phone_ui)]
+#[test]
+#[ignore = "visual check: CIPHER_UI=phone CIPHER_SCREENSHOTS=<dir> cargo test phone_touch -- --ignored"]
+fn phone_touch() {
+    let (ui, _ctx, _monitor, d) = start();
+    let state = ui.global::<AppState>();
+    let toggles = Rc::new(Cell::new(0));
+    state.on_toggle_connection({
+        let toggles = toggles.clone();
+        move || toggles.set(toggles.get() + 1)
+    });
+    // Enough configs for the list to scroll.
+    let links: Vec<String> = (0..6)
+        .flat_map(|i| {
+            [
+                format!("vless://bf000d23-0752-40b4-affe-68f7707a9661@v{i}.example.com:443?security=tls#VLESS {i}"),
+                format!("trojan://pw@t{i}.example.com:443#Trojan {i}"),
+            ]
+        })
+        .chain(["hy2://pw@d.example.com:443#Hysteria D".into()])
+        .collect();
+    state.invoke_add_links(links.join("\n").into());
+    d.pump(300);
+
+    // Pull to connect.
+    d.swipe(200.0, 120.0, 0, &[20.0, 60.0, 100.0]);
+    assert_eq!(toggles.get(), 0, "a short pull doesn't toggle");
+    d.swipe(200.0, 120.0, 0, &[20.0, 60.0, 100.0, 140.0, 190.0]);
+    assert_eq!(toggles.get(), 1, "a full pull toggles");
+
+    d.click(300.0, (HEIGHT - 34) as f32); // bottom bar: Library
+    state.set_current_tab(1);
+    d.pump(300);
+    d.shot("t01-configs");
+    let headers = || state.get_groups().iter().map(|c| c.name.to_string()).collect::<Vec<_>>();
+    let folded = || state.get_groups().iter().filter(|c| c.collapsed).count();
+    assert_eq!(headers(), ["VLESS", "Trojan", "Hysteria2"]);
+
+    // Held, then dragged: the VLESS heading (y 200) goes to the bottom.
+    use i_slint_core::input::TouchPhase;
+    d.touch(TouchPhase::Started, 200.0, 200.0);
+    d.pump(700);
+    for dy in [10.0, 30.0, 50.0, 70.0] {
+        d.touch(TouchPhase::Moved, 200.0, 200.0 + dy);
+    }
+    d.pump(200);
+    d.shot("t02-dragging");
+    d.touch(TouchPhase::Ended, 200.0, 270.0);
+    d.pump(200);
+    assert_eq!(headers(), ["Trojan", "Hysteria2", "VLESS"]);
+    assert_eq!(folded(), 0);
+    d.shot("t03-dropped");
+
+    // A tap folds a group, another opens it again.
+    d.swipe(200.0, 200.0, 0, &[]);
+    assert_eq!(folded(), 1);
+    d.swipe(200.0, 200.0, 0, &[]);
+    assert_eq!(folded(), 0);
+
+    // A quick swipe on a heading scrolls the list: no drag, no fold.
+    d.swipe(200.0, 200.0, 0, &[-15.0, -40.0, -80.0, -160.0]);
+    assert_eq!(headers(), ["Trojan", "Hysteria2", "VLESS"]);
+    assert_eq!(folded(), 0);
+    d.pump(1500); // let the fling settle
+    d.shot("t04-swiped");
 }
