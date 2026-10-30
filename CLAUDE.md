@@ -179,8 +179,13 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
   Subscriptions update in place; selection follows the same server name.
 - **Configs grouping**: `refresh_configs` → `grouped()` sorts rows by `group_order(settings)` (Settings.group_order,
   the user's, then `GROUP_ORDER`; unknown groups after, by name) and inserts heading rows (`ConfigData.header`, id -1,
-  `count`, `collapsed`, `first`/`last`); folded groups live in `Shared.collapsed` (session only, by name). The header
-  arrows → `move_group` → `moved_group()` (moves among the shown groups). `Settings.sort_by_latency` (toolbar) sorts
+  `count`, `collapsed`, `index`, `first`/`last`); `AppState.groups` = just the headings. Folded groups live in
+  `Shared.collapsed` (session only, by name). The header arrows → `move_group` → `moved_group()` (moves among the
+  shown groups); dragging a heading → `place-group(name, index)` → `placed_group()`. Drag UI (configs-panel.slint):
+  a layer over the ListView shows only the headings while one is dragged (the ListView itself is never changed
+  mid-drag: rebuilding it would destroy the TouchArea holding the grab), auto-scrolls near its edges. Mouse drags
+  start at once (Fluent ScrollView has mouse-drag-pan off); touch needs a ~0.5s hold (GroupHeader's Timer), because
+  Slint's Flickable steals vertical swipes > 8px within 500ms of the press. `Settings.sort_by_latency` (toolbar) sorts
   rows by `latency_rank` before grouping (stable); a latency test re-sorts once at the end, not per result.
 - **Editing configs**: manual only (`Store::manual_mut`). `Entry.link` = the share link it was added from
   (`Subscription.links`, by index; `into_imported()` pairs them; subscription entries don't keep links). Edit dialog
@@ -193,6 +198,10 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - **UI scale** (desktop, Settings → WINDOW, shown when `AppState.desktop`): `run()` loads the Store before creating the window and sets `SLINT_SCALE_FACTOR` from
   `ui_scale` (unless already set; winit reads it only at window creation). `ui_scale_changed` applies a percentage live
   (`ScaleFactorChanged` + `set_size` to the same logical size); "System" needs a restart (system factor unknown then).
+- **Pull to connect** (phone, `ConnectPanel.pull`): a downward drag anywhere on the connect screen (or the button)
+  draws an arc around the button and grows it; at `pull-distance` (180px) it calls `AppState.haptic()` (Android:
+  MainActivity.haptic → performHapticFeedback CONFIRM) and `toggle-connection`. Only when the screen doesn't scroll
+  (a scrolling ScrollView takes vertical drags). `phone_screenshots` checks it with a counting toggle handler.
 - **Traffic box** (connect panel, under the power button): `monitor_tick` reads `Engine::traffic()` (try_lock), keeps 3 samples
   in `Shared.traffic` (speeds average over them; counters update out of step with the tick), cleared in `set_state`.
 - **Latency test**: TCP connect (3s, 16 workers) to `Profile::tcp_endpoint()`; UDP protocols skipped.
@@ -235,7 +244,7 @@ tests/fixtures/      sing-box JSON fixtures (vless_reality, wireguard, hysteria2
 - Git repo since 2026-10-18 (branch `master`, remote `origin` = github.com/qu-cipher/cipher; latest release v0.4.2, tagged 2026-10-28). Older manual backup: `/home/ali/Dev/_rust/cipher_vpn_client.backup-20261018-0059`.
 - Code style: LF line endings (normalized), all config struct fields `pub`, fixed-value strings modeled as enums.
 
-## Status & history (as of 2026-10-28)
+## Status & history (as of 2026-10-30)
 Releases: v0.3.0 = Xray core + anti-DPI toggles. 0.3.1 (Psiphon back for users' own servers) was never tagged. v0.4.0 = plugin system.
 v0.4.1 (tag pushed 2026-10-27) = core plugins + official MasterDnsVPN plugin, Android build (phone UI, Tunnel mode, OpenVPN),
 traffic box, tray icon + close to tray, UI scale, settings layout fixes. First release with a signed APK: release key
@@ -243,13 +252,14 @@ traffic box, tray icon + close to tray, UI scale, settings layout fixes. First r
 Android only installs updates signed with it), stored in the repo's ANDROID_* Actions secrets.
 v0.4.2 (tag pushed 2026-10-28) = first round of real users' feedback (Windows users): resizable window (maximize,
 compact layout below 820px, size remembered, minimum size kept), editing manual configs (name + link), sort by ping,
-user-ordered protocol groups.
+user-ordered protocol groups. 0.4.3 (committed 2026-10-30) = pull to connect on the phone (+ haptic tick), dragging
+group headings to reorder them (grip + arrows kept). Haptic tick and touch drags not yet tried on a real phone.
 Releasing = bump Cargo.toml, commit, then push a `v*` tag; pushing commits alone builds nothing.
 Next: official sni-spoofing-rust plugin (docs/plugins-plan.md, private); addons ideas in docs/addons-plan.md (private).
 Maybe later: built-in public VPN servers for general use (user's idea, not planned yet).
 Built across earlier sessions: config schema rewrite (client-only, 1.12+) → engine layer → importers →
 full UI + store → connection modes → OpenVPN credentials, TUIC/AnyTLS, sing-box JSON subscriptions,
-in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 112 tests passing (+15 ignored) at last count (2026-10-28); clippy mostly clean.
+in-app sing-box download → ovpn:// links → pkexec per Tunnel connect (replaced Grant). 113 tests passing (+15 ignored) at last count (2026-10-30); clippy mostly clean.
 
 User-confirmed working: proxy modes, Tunnel mode (after the gvisor fix), UI scale (live and at startup), tray icon +
 close to tray (KDE), sing-box + OpenVPN on the user's Android phone.

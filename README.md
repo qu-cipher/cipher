@@ -63,11 +63,13 @@ for an existing engine, and runs that engine as a child process:
   - **Official plugins** are listed in the tab, ready to add:
     [MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN), a DNS tunnel to your own MasterDnsVPN
     server (domain, encryption and your resolver list are set per config).
-- **Configs grouped by protocol** (VLESS, Trojan, …, Psiphon, Plugins); groups fold, their arrows put them
-  in your own order, and the grouping toggles from the Configs toolbar. **Sort by ping** (toolbar) puts the
+- **Configs grouped by protocol** (VLESS, Trojan, …, Psiphon, Plugins); groups fold, and you put them in
+  your own order by dragging their headings (with a finger: hold first) or with their arrows. The grouping
+  toggles from the Configs toolbar. **Sort by ping** (toolbar) puts the
   fastest configs of the last latency test first.
 - **Edit your own configs** (the pencil on configs you added, not subscription ones): rename them, or change
   the share link to update the server and settings.
+- **Pull to connect** (phone): pull down on the connect screen until the circle around the button closes.
 - **Traffic** under the connect button: download / upload speed and this connection's totals.
 - **Tray icon** (desktop): green while connected; its menu shows the window, connects / disconnects and quits.
   *Settings → Window → Close to tray* (on by default) keeps Cipher and the connection running when the window

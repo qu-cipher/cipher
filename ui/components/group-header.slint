@@ -1,28 +1,94 @@
 import { Theme } from "../theme.slint";
-import { ConfigData } from "../state.slint";
+import { AppState, ConfigData } from "../state.slint";
 import { IconButton } from "buttons.slint";
 
-// Heading of a protocol group in the Configs list. Click to fold the group; the arrows move it.
+// Heading of a protocol group in the Configs list. Click to fold the group; the arrows move it,
+// and so does dragging it (a mouse right away; a finger after holding it, since a swipe scrolls).
 export component GroupHeader inherits Rectangle {
     in property <ConfigData> data;
+    // Drawn as the heading being dragged.
+    in property <bool> lifted;
 
     callback clicked();
     // -1 = up, 1 = down
     callback move(int);
+    // A drag began; `offset` = where the pointer holds the heading, `y` = the pointer (window coordinates).
+    callback lift(/* offset */ length, /* y */ length);
+    // The pointer moved during a drag (window coordinates).
+    callback drag(length);
+    // The drag ended: let go (`drop`), or taken over by scrolling (`cancel`).
+    callback drop();
+    callback cancel();
 
     height: 28px;
     border-radius: 8px;
-    background: touch.has-hover ? Theme.surface : transparent;
+    background: root.lifted ? Theme.surface-raised : touch.has-hover ? Theme.surface : transparent;
+    border-width: root.lifted ? 1px : 0px;
+    border-color: Theme.accent.transparentize(40%);
+
+    // Only one group: nowhere to drag it.
+    private property <bool> draggable: !(root.data.first && root.data.last);
+    // A drag is under way.
+    private property <bool> active;
+    // This press became a drag: letting go isn't a click.
+    private property <bool> dragged;
+
+    function start() {
+        root.active = true;
+        root.dragged = true;
+        AppState.haptic();
+        root.lift(touch.pressed-y, touch.absolute-position.y + touch.mouse-y);
+    }
 
     touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
+        mouse-cursor: root.active || root.lifted ? MouseCursor.grabbing : MouseCursor.pointer;
+        clicked => {
+            if !root.dragged {
+                root.clicked();
+            }
+        }
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.dragged = false;
+            } else if root.active && event.kind == PointerEventKind.up {
+                root.active = false;
+                root.drop();
+            } else if root.active && event.kind == PointerEventKind.cancel {
+                root.active = false;
+                root.cancel();
+            }
+        }
+        moved => {
+            if root.draggable && !root.active && abs(self.mouse-y - self.pressed-y) > 10px {
+                root.start();
+            }
+            if root.active {
+                root.drag(self.absolute-position.y + self.mouse-y);
+            }
+        }
+    }
+
+    // Held still: picked up (how a finger starts a drag).
+    Timer {
+        interval: 450ms;
+        running: touch.pressed && root.draggable && !root.dragged;
+        triggered => { root.start(); }
     }
 
     HorizontalLayout {
-        padding-left: 6px;
+        padding-left: 2px;
         padding-right: 4px;
         spacing: 6px;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: @image-url("../../assets/icons/MdiDragVertical.svg");
+                width: 14px;
+                height: 14px;
+                colorize: root.draggable ? Theme.text-faint : transparent;
+            }
+        }
 
         VerticalLayout {
             alignment: center;

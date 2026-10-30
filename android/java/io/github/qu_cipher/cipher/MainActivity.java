@@ -3,10 +3,12 @@ package io.github.qu_cipher.cipher;
 import android.app.NativeActivity;
 import android.content.Intent;
 import android.net.VpnService;
+import android.os.Build;
+import android.view.HapticFeedbackConstants;
 
 /**
  * The app's window: a NativeActivity running libcipher_client.so (android_main). The vpn*
- * methods are called from Rust (src/android.rs) on its own threads.
+ * methods and haptic() are called from Rust (src/android.rs) on its own threads.
  */
 public class MainActivity extends NativeActivity {
     private static final int VPN_REQUEST = 1;
@@ -52,6 +54,13 @@ public class MainActivity extends NativeActivity {
 
     public int vpnRevoked() {
         return CipherVpnService.revoked ? 1 : 0;
+    }
+
+    /** A short tick as touch feedback (no VIBRATE permission needed); 0 always. */
+    public int haptic() {
+        int effect = Build.VERSION.SDK_INT >= 30 ? HapticFeedbackConstants.CONFIRM : HapticFeedbackConstants.LONG_PRESS;
+        runOnUiThread(() -> getWindow().getDecorView().performHapticFeedback(effect));
+        return 0;
     }
 
     public int vpnStop() {

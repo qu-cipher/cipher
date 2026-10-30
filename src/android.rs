@@ -102,6 +102,11 @@ pub fn revoked() -> bool {
     call_int!("vpnRevoked").is_ok_and(|r| r == 1)
 }
 
+/// A short tick, the system's touch feedback (follows the user's vibration settings).
+pub fn haptic() {
+    let _ = call_int!("haptic");
+}
+
 /// Closes the TUN and stops the service.
 pub fn stop() {
     let _ = call_int!("vpnStop");

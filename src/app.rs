@@ -223,6 +223,8 @@ mod window;
 fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
     plugins::bind(ui, ctx);
     on!(ui, ctx, on_toggle_connection, |ui, ctx| toggle_connection(&ui, ctx));
+    #[cfg(target_os = "android")]
+    ui.global::<AppState>().on_haptic(crate::android::haptic);
     on!(ui, ctx, on_mode_changed, |ui, ctx| {
         settings_changed(&ui, ctx);
         // Like switching configs: a live connection moves over to the new mode.
@@ -248,6 +250,7 @@ fn bind_callbacks(ui: &AppWindow, ctx: &Ctx) {
         refresh_configs(&ui, ctx);
     });
     on!(ui, ctx, on_move_group, |ui, ctx, name: SharedString, step: i32| move_group(&ui, ctx, &name, step));
+    on!(ui, ctx, on_place_group, |ui, ctx, name: SharedString, to: i32| place_group(&ui, ctx, &name, to));
     on!(ui, ctx, on_edit_config, |ui, ctx, id: i32| edit_config(&ui, ctx, id as u64));
     on!(ui, ctx, on_save_config, |ui, ctx| save_config(&ui, ctx));
     on!(ui, ctx, on_test_latency, |ui, ctx| test_latency(&ui, ctx));
@@ -439,6 +442,7 @@ fn refresh_configs(ui: &AppWindow, ctx: &Ctx) {
     state.set_filters(ModelRc::new(VecModel::from(filters)));
     state.set_filter_index(filter_index as i32);
     state.set_config_total(store.all_entries().count() as i32);
+    state.set_groups(ModelRc::new(VecModel::from(rows.iter().filter(|r| r.header).cloned().collect::<Vec<_>>())));
     state.set_configs(ModelRc::new(VecModel::from(rows)));
 
     // The selected config card.
@@ -473,6 +477,7 @@ fn grouped(rows: &mut [(&Profile, ConfigData)], order: &[String], collapsed: &Ha
             header: true,
             count: chunk.len() as i32,
             collapsed: is_collapsed,
+            index: i as i32,
             first: i == 0,
             last: i == chunks.len() - 1,
             ..Default::default()
@@ -496,27 +501,45 @@ fn group_order(settings: &Settings) -> Vec<String> {
 }
 
 /// `order` with `group` moved one place up (`step` < 0) or down among the `shown` groups (the
-/// list's headings, in order), or `None` when it can't move. Groups not in `order` yet (a core
-/// plugin's protocols) are added where they're shown.
-fn moved_group(mut order: Vec<String>, shown: &[String], group: &str, step: i32) -> Option<Vec<String>> {
+/// list's headings, in order), or `None` when it can't move.
+fn moved_group(order: Vec<String>, shown: &[String], group: &str, step: i32) -> Option<Vec<String>> {
     let at = shown.iter().position(|g| g == group)?;
-    let neighbor = shown.get(at.checked_add_signed(step.signum() as isize)?)?;
+    placed_group(order, shown, group, at.checked_add_signed(step.signum() as isize)?)
+}
+
+/// `order` with `group` moved to place `to` among the `shown` groups (dragged there), or `None`
+/// when that's where it already is. Groups not in `order` yet (a core plugin's protocols) are
+/// added where they're shown.
+fn placed_group(mut order: Vec<String>, shown: &[String], group: &str, to: usize) -> Option<Vec<String>> {
+    let at = shown.iter().position(|g| g == group)?;
+    let neighbor = shown.get(to).filter(|_| to != at)?;
     for g in shown {
         if !order.contains(g) {
             order.push(g.clone());
         }
     }
     order.retain(|g| g != group);
-    let index = order.iter().position(|g| g == neighbor)? + usize::from(step > 0);
+    // Taking its place pushes the neighbor down when moving up, up when moving down.
+    let index = order.iter().position(|g| g == neighbor)? + usize::from(to > at);
     order.insert(index, group.to_owned());
     Some(order)
 }
 
 fn move_group(ui: &AppWindow, ctx: &Ctx, group: &str, step: i32) {
-    let shown: Vec<String> = ui.global::<AppState>().get_configs().iter().filter(|r| r.header).map(|r| r.name.into()).collect();
+    reorder_groups(ui, ctx, |order, shown| moved_group(order, shown, group, step));
+}
+
+fn place_group(ui: &AppWindow, ctx: &Ctx, group: &str, to: i32) {
+    let Ok(to) = usize::try_from(to) else { return };
+    reorder_groups(ui, ctx, |order, shown| placed_group(order, shown, group, to));
+}
+
+/// Saves the group order `reorder` makes from the current one and the list's headings.
+fn reorder_groups(ui: &AppWindow, ctx: &Ctx, reorder: impl FnOnce(Vec<String>, &[String]) -> Option<Vec<String>>) {
+    let shown: Vec<String> = ui.global::<AppState>().get_groups().iter().map(|r| r.name.into()).collect();
     {
         let mut store = ctx.store.lock().unwrap();
-        let Some(order) = moved_group(group_order(&store.settings), &shown, group, step) else { return };
+        let Some(order) = reorder(group_order(&store.settings), &shown) else { return };
         store.settings.group_order = order;
         save(ui, ctx, &store);
     }
@@ -1596,6 +1619,27 @@ mod tests {
         assert_eq!(moved_group(order.clone(), &shown, "VLESS", -1), None);
         assert_eq!(moved_group(order.clone(), &shown, "mieru", 1), None);
         assert_eq!(moved_group(order, &shown, "WireGuard", 1), None);
+    }
+
+    #[test]
+    fn places_dragged_groups() {
+        let order = group_order(&Settings::default());
+        let shown: Vec<String> = ["VLESS", "Trojan", "Psiphon", "mieru"].map(String::from).into();
+        let shown_in = |order: &[String]| {
+            let mut s = shown.clone();
+            s.sort_by_key(|g| order.iter().position(|o| o == g));
+            s
+        };
+
+        let moved = placed_group(order.clone(), &shown, "VLESS", 2).unwrap();
+        assert_eq!(shown_in(&moved), ["Trojan", "Psiphon", "VLESS", "mieru"]);
+        let moved = placed_group(order.clone(), &shown, "mieru", 0).unwrap();
+        assert_eq!(shown_in(&moved), ["mieru", "VLESS", "Trojan", "Psiphon"]);
+        let moved = placed_group(order.clone(), &shown, "Trojan", 3).unwrap();
+        assert_eq!(shown_in(&moved), ["VLESS", "Psiphon", "mieru", "Trojan"]);
+        // Dropped where it was, or past the end.
+        assert_eq!(placed_group(order.clone(), &shown, "Trojan", 1), None);
+        assert_eq!(placed_group(order, &shown, "Trojan", 4), None);
     }
 
     #[test]

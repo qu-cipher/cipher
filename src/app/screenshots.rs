@@ -112,6 +112,23 @@ impl Driver {
         self.pump(60);
     }
 
+    /// Presses at (x, y) and moves down by each of `steps` in turn, without releasing.
+    fn drag(&self, x: f32, y: f32, steps: &[f32]) {
+        let position = LogicalPosition::new(x, y);
+        self.window.dispatch_event(WindowEvent::PointerMoved { position });
+        self.window.dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+        for dy in steps {
+            self.window.dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(x, y + dy) });
+            self.pump(20);
+        }
+        self.pump(200);
+    }
+
+    fn release(&self, x: f32, y: f32) {
+        self.window.dispatch_event(WindowEvent::PointerReleased { position: LogicalPosition::new(x, y), button: PointerEventButton::Left });
+        self.pump(60);
+    }
+
     fn hover(&self, x: f32, y: f32) {
         self.window.dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(x, y) });
         self.pump(150);
@@ -412,6 +429,33 @@ fn config_list_screenshots() {
     let saved = crate::store::Store::load().settings;
     assert!(saved.sort_by_latency);
     assert_eq!(saved.group_order.first().map(String::as_str), Some("Trojan"));
+
+    // Drag the Trojan heading (y 142) to the bottom: the headings fold while it moves.
+    let headers = || state.get_groups().iter().map(|c| c.name.to_string()).collect::<Vec<_>>();
+    d.drag(500.0, 142.0, &[12.0, 40.0, 60.0]);
+    d.shot("c07-group-dragging");
+    d.drag(500.0, 142.0, &[]);
+    d.window.dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(500.0, 225.0) });
+    d.pump(200);
+    d.shot("c08-group-drag-bottom");
+    d.release(500.0, 225.0);
+    assert_eq!(headers(), ["VLESS", "Hysteria2", "Trojan"]);
+    d.shot("c09-group-dropped");
+    let saved = crate::store::Store::load().settings;
+    let shown: Vec<&String> = saved.group_order.iter().filter(|g| ["VLESS", "Hysteria2", "Trojan"].contains(&g.as_str())).collect();
+    assert_eq!(shown, ["VLESS", "Hysteria2", "Trojan"]);
+
+    // Held still, a heading lifts (how a finger starts a drag); letting go there neither moves nor folds it.
+    let collapsed = |name: &str| state.get_groups().iter().any(|c| c.name == name && c.collapsed);
+    d.drag(500.0, 142.0, &[]);
+    d.pump(400);
+    d.shot("c10-group-held");
+    d.release(500.0, 142.0);
+    assert_eq!(headers(), ["VLESS", "Hysteria2", "Trojan"]);
+    assert!(!collapsed("VLESS"));
+    // A plain click still folds it.
+    d.click(500.0, 142.0);
+    assert!(collapsed("VLESS"));
 }
 
 /// The window resized and maximized. Never connects: `CIPHER_SCREENSHOTS=<dir> cargo test resize_screenshots -- --ignored`
@@ -832,6 +876,32 @@ fn phone_screenshots() {
     d.click(300.0, 484.0); // mode: Proxy only (2nd of 2 tabs)
     d.shot("p04-proxy-only");
     assert_eq!(state.get_mode(), 2);
+
+    // Pull to connect, with toggling counted instead of connecting.
+    let toggles = Rc::new(Cell::new(0));
+    state.on_toggle_connection({
+        let toggles = toggles.clone();
+        move || toggles.set(toggles.get() + 1)
+    });
+    d.drag(200.0, 120.0, &[10.0, 30.0, 60.0, 80.0]); // on empty space above the button
+    d.shot("p04a-pull-half");
+    d.release(200.0, 200.0);
+    d.shot("p04b-pull-let-go");
+    assert_eq!(toggles.get(), 0, "an unfinished pull doesn't toggle");
+    d.drag(200.0, 250.0, &[10.0, 60.0, 120.0]); // starting on the button
+    d.shot("p04c-pull-most");
+    for dy in [150.0, 180.0, 220.0] {
+        d.window.dispatch_event(WindowEvent::PointerMoved { position: LogicalPosition::new(200.0, 250.0 + dy) });
+        d.pump(20);
+    }
+    d.shot("p04d-pull-done");
+    d.release(200.0, 470.0);
+    assert_eq!(toggles.get(), 1, "a full pull toggles once");
+    d.drag(200.0, 250.0, &[4.0, 20.0]);
+    d.release(200.0, 270.0); // a short drag on the button: neither a pull nor a tap
+    assert_eq!(toggles.get(), 1);
+    d.click(200.0, 250.0);
+    assert_eq!(toggles.get(), 2, "a tap still toggles");
 
     d.click(300.0, (HEIGHT - 34) as f32); // bottom bar: Library
     state.set_current_tab(0);

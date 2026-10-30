@@ -57,6 +57,8 @@ export component ConnectPanel inherits Rectangle {
     in property <length> size: 128px;
     // Offer the System proxy mode (desktop only).
     in property <bool> system-proxy: true;
+    // Pulling down anywhere on the panel connects / disconnects (phones).
+    in property <bool> pull;
 
     // The selected-config card was clicked.
     callback open-configs();
@@ -71,6 +73,69 @@ export component ConnectPanel inherits Rectangle {
     private property <color> ring-color: connected || busy ? tint : touch.has-hover ? Theme.accent : Theme.border-strong;
     // 0..1 breathing value; only ticks while busy so an idle window doesn't keep redrawing.
     private property <float> wave: busy ? (1 + sin(animation-tick() / 1.4s * 360deg)) / 2 : 0;
+    // Connecting can be cancelled; disconnecting can't.
+    private property <bool> can-toggle: state != ConnectionState.disconnecting && !AppState.cancelling;
+
+    // ── Pull to connect ──
+    // How far down a finger travels to close the circle.
+    private property <length> pull-distance: 180px;
+    // 0..1: the arc drawn around the button; follows the finger, unwinds when let go early.
+    private property <float> progress;
+    animate progress { duration: root.pulling ? 0ms : 200ms; easing: ease-out; }
+    // A pull is under way (past a small dead zone, not yet completed).
+    private property <bool> pulling;
+    // This pull closed the circle and toggled; nothing more until the finger lifts.
+    private property <bool> pulled;
+    // The finger moved since it went down: the button's tap doesn't count then.
+    private property <bool> dragged;
+    // 0..1: how much the button has grown; follows the pull, settles back once it ends.
+    private property <float> grow: root.pulling ? 0.3 + 0.7 * root.progress : 0;
+    animate grow { duration: root.pulling ? 60ms : 200ms; easing: ease-out; }
+    // The button's diameter: up to 14% bigger; the disc and the icon inside it grow more.
+    private property <length> disc: root.size * (1 + 0.14 * root.grow);
+    // 0..1: the disc sinks in while the button is held for a tap.
+    private property <float> press: touch.pressed && !root.dragged ? 1 : 0;
+    animate press { duration: 80ms; easing: ease-in-out; }
+
+    function pull-start() {
+        root.pulled = false;
+        root.dragged = false;
+    }
+
+    function pull-to(dy: length) {
+        if dy > 8px {
+            root.dragged = true;
+        }
+        if !root.pull || root.pulled || !root.can-toggle {
+            return;
+        }
+        root.pulling = dy > 8px;
+        root.progress = root.pulling ? clamp(dy / root.pull-distance, 0, 1) : 0;
+        if root.progress >= 1 {
+            // The completed circle fades out (`pulled`) while the button settles back.
+            root.pulled = true;
+            root.pulling = false;
+            AppState.haptic();
+            AppState.toggle-connection();
+        }
+    }
+
+    function pull-end() {
+        root.pulling = false;
+        root.progress = 0;
+    }
+
+    // Behind the content, so a pull can start on any empty part of the panel.
+    if root.pull: TouchArea {
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                root.pull-start();
+            } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                root.pull-end();
+            }
+        }
+        moved => { root.pull-to(self.mouse-y - self.pressed-y); }
+    }
 
     VerticalLayout {
         alignment: center;
@@ -88,7 +153,7 @@ export component ConnectPanel inherits Rectangle {
 
                 // Soft static glow behind the button, in the state's color.
                 Rectangle {
-                    width: root.size * 2.2;
+                    width: root.disc * 2.2;
                     height: self.width;
                     background: @radial-gradient(circle, root.tint.transparentize(root.connected ? 84% : root.busy ? 88% : 95%) 0%, transparent 70%);
                 }
@@ -116,16 +181,45 @@ export component ConnectPanel inherits Rectangle {
                     stroke-width: 3px;
                 }
 
+                // Pull to connect: a faint track, and the arc that fills it clockwise from the top.
+                if root.pull: Path {
+                    width: root.disc + 30px;
+                    height: root.disc + 30px;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    commands: "M 50 2 A 48 48 0 0 1 50 98 A 48 48 0 0 1 50 2";
+                    stroke: Theme.border-strong;
+                    stroke-width: 3px;
+                    opacity: root.pulling ? 0.6 : 0;
+                    animate opacity { duration: 150ms; }
+                }
+
+                if root.pull && root.progress > 0.005: Path {
+                    property <angle> end: -90deg + root.progress * 360deg;
+                    width: root.disc + 30px;
+                    height: root.disc + 30px;
+                    viewbox-width: 100;
+                    viewbox-height: 100;
+                    // Two arcs past halfway: one SVG arc can't draw a whole circle.
+                    commands: "M 50 2 A 48 48 0 0 1 "
+                        + (root.progress > 0.5 ? "50 98 A 48 48 0 0 1 " : "")
+                        + (50 + 48 * cos(self.end)) + " " + (50 + 48 * sin(self.end));
+                    stroke: root.connected ? Theme.text-muted : Theme.accent;
+                    stroke-width: 3px;
+                    opacity: root.pulled ? 0 : 1;
+                    animate opacity { duration: 250ms; }
+                }
+
                 ring := Rectangle {
-                    width: root.size;
-                    height: root.size;
+                    width: root.disc;
+                    height: root.disc;
                     border-radius: self.width / 2;
                     border-width: 2px;
                     border-color: root.ring-color;
                     animate border-color { duration: 250ms; }
 
                     Rectangle {
-                        width: touch.pressed ? root.size * 0.72 : root.size * 0.84;
+                        width: root.disc * (0.84 + 0.06 * root.grow - 0.12 * root.press);
                         height: self.width;
                         border-radius: self.width / 2;
                         // Lit when connected, a dark raised disc otherwise. Solid colors: the software
@@ -134,11 +228,10 @@ export component ConnectPanel inherits Rectangle {
                         animate background { duration: 250ms; }
                         border-width: root.connected ? 0px : 1px;
                         border-color: Theme.border-strong;
-                        animate width { duration: 80ms; easing: ease-in-out; }
 
                         Image {
                             source: @image-url("../../assets/icons/MdiPowerStandby.svg");
-                            width: parent.width / 2.2;
+                            width: parent.width / (2.2 - 0.3 * root.grow);
                             height: self.width;
                             colorize: root.connected ? Theme.on-accent
                                 : root.busy ? Theme.connecting
@@ -147,10 +240,22 @@ export component ConnectPanel inherits Rectangle {
                     }
 
                     touch := TouchArea {
-                        // Connecting can be cancelled; disconnecting can't.
-                        enabled: root.state != ConnectionState.disconnecting && !AppState.cancelling;
+                        enabled: root.can-toggle;
                         mouse-cursor: self.enabled ? pointer : default;
-                        clicked => { AppState.toggle-connection(); }
+                        // A pull can start on the button too; then lifting the finger isn't a tap.
+                        clicked => {
+                            if !root.dragged {
+                                AppState.toggle-connection();
+                            }
+                        }
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.down {
+                                root.pull-start();
+                            } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                                root.pull-end();
+                            }
+                        }
+                        moved => { root.pull-to(self.mouse-y - self.pressed-y); }
                     }
                 }
             }
@@ -174,6 +279,7 @@ export component ConnectPanel inherits Rectangle {
                 text: root.connected && AppState.proxy-address != "" ? "Proxy on " + AppState.proxy-address + " · " + AppState.uptime
                     : root.connected ? AppState.uptime
                     : root.state == ConnectionState.connecting && !AppState.cancelling ? "Tap again to cancel"
+                    : root.pull && root.state == ConnectionState.disconnected ? "Tap or pull down to connect"
                     : "";
                 font-size: 12px;
                 horizontal-alignment: center;

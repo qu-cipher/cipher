@@ -40,6 +40,38 @@ export component ConfigsPanel inherits VerticalLayout {
 
     spacing: 8px;
 
+    // ── Dragging a group ──
+    // While a heading is dragged, a layer over the list shows just the headings (all folded);
+    // the others slide aside to show where it will land.
+    // A heading and the gap below it.
+    private property <length> row-height: 33px;
+    // The dragged group's index in `AppState.groups`; -1 = no drag.
+    private property <int> drag-from: -1;
+    // Where the pointer holds the heading.
+    private property <length> grab;
+    // The pointer, from the list's top.
+    private property <length> drag-y;
+    // The layer's own scroll, for when the headings don't fit.
+    private property <length> scroll;
+    private property <length> max-scroll: max(0px, AppState.groups.length * root.row-height - 5px - list-area.height);
+    // Where it would land.
+    private property <int> drag-to: clamp(round((root.drag-y - root.grab + root.scroll) / root.row-height), 0, AppState.groups.length - 1);
+
+    function drop-group() {
+        if root.drag-to != root.drag-from {
+            AppState.place-group(AppState.groups[root.drag-from].name, root.drag-to);
+        }
+        root.drag-from = -1;
+    }
+
+    // Scrolls the layer while the pointer is near its top or bottom edge.
+    Timer {
+        interval: 16ms;
+        running: root.drag-from >= 0
+            && ((root.drag-y < 24px && root.scroll > 0) || (root.drag-y > list-area.height - 24px && root.scroll < root.max-scroll));
+        triggered => { root.scroll = clamp(root.scroll + (root.drag-y < 24px ? -6px : 6px), 0, root.max-scroll); }
+    }
+
     HorizontalLayout {
         spacing: 6px;
 
@@ -82,8 +114,10 @@ export component ConfigsPanel inherits VerticalLayout {
     // Phone width: the buttons get their own row.
     if root.compact: Actions { }
 
+    list-area := Rectangle {
+    vertical-stretch: 1;
+
     if AppState.configs.length == 0: Text {
-        vertical-stretch: 1;
         text: AppState.config-total == 0
             ? "No configs yet.\nAdd share links, import a WireGuard / OpenVPN file,\nor add a subscription."
             : "Nothing in this list.";
@@ -94,8 +128,6 @@ export component ConfigsPanel inherits VerticalLayout {
     }
 
     if AppState.configs.length > 0: ListView {
-        vertical-stretch: 1;
-
         for config in AppState.configs: VerticalLayout {
             padding-bottom: 5px;
 
@@ -103,6 +135,16 @@ export component ConfigsPanel inherits VerticalLayout {
                 data: config;
                 clicked => { AppState.toggle-group(config.name); }
                 move(step) => { AppState.move-group(config.name, step); }
+                lift(offset, y) => {
+                    root.grab = offset;
+                    root.drag-y = y - list-area.absolute-position.y;
+                    // Line the folded headings up so this one stays under the pointer.
+                    root.scroll = clamp(config.index * root.row-height - (root.drag-y - offset), 0, root.max-scroll);
+                    root.drag-from = config.index;
+                }
+                drag(y) => { root.drag-y = y - list-area.absolute-position.y; }
+                drop => { root.drop-group(); }
+                cancel => { root.drag-from = -1; }
             }
 
             if !config.header: ConfigItem {
@@ -114,5 +156,40 @@ export component ConfigsPanel inherits VerticalLayout {
                 remove => { AppState.remove-config(config.id); }
             }
         }
+    }
+
+    if root.drag-from >= 0: Rectangle {
+        background: Theme.background;
+        clip: true;
+
+        for group[i] in AppState.groups: GroupHeader {
+            // Its place with the dragged one taken out and put back at `drag-to`.
+            property <int> slot: i > root.drag-from && i <= root.drag-to ? i - 1
+                : i < root.drag-from && i >= root.drag-to ? i + 1 : i;
+            property <length> slot-y: self.slot * root.row-height;
+            animate slot-y { duration: 120ms; easing: ease-out; }
+            y: self.slot-y - root.scroll;
+            width: parent.width;
+            data: group;
+            visible: i != root.drag-from;
+        }
+
+        // Where it will land.
+        Rectangle {
+            y: root.drag-to * root.row-height - root.scroll;
+            height: 28px;
+            border-radius: 8px;
+            background: Theme.selected;
+            border-width: 1px;
+            border-color: Theme.accent.transparentize(60%);
+        }
+
+        GroupHeader {
+            y: clamp(root.drag-y - root.grab, 0, parent.height - self.height);
+            width: parent.width;
+            data: AppState.groups[root.drag-from];
+            lifted: true;
+        }
+    }
     }
 }

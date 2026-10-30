@@ -28,7 +28,8 @@ export struct ConfigData {
     header: bool,
     count: int,
     collapsed: bool,
-    // A heading's place among the shown groups (disables its move buttons).
+    // A heading's place among the shown groups (`index` from 0; `first` / `last` disable its move buttons).
+    index: int,
     first: bool,
     last: bool,
 }
@@ -111,6 +112,8 @@ export global AppState {
     // ── Lists ──
     in property <[SubscriptionData]> subscriptions;
     in property <[ConfigData]> configs;
+    // Just the group headings of `configs`, in order (for dragging groups).
+    in property <[ConfigData]> groups;
     in property <int> config-total;
     in property <[string]> filters: ["All"];
     in-out property <int> filter-index;
@@ -250,6 +253,8 @@ export global AppState {
     in property <bool> psiphon-busy;
 
     callback toggle-connection();
+    // A short vibration: the pull-to-connect circle closed (Android only).
+    callback haptic();
     callback mode-changed();
     callback select-config(int);
     callback remove-config(int);
@@ -260,6 +265,8 @@ export global AppState {
     callback toggle-group(string);
     // a group's move buttons: its name, -1 = up, 1 = down
     callback move-group(string, int);
+    // A group dragged to a place among the shown ones (an index into `groups`).
+    callback place-group(string, int);
     // a manual config's edit button: opens the edit dialog
     callback edit-config(int);
     callback save-config();

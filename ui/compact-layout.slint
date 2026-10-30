@@ -139,6 +139,7 @@ export component CompactLayout inherits VerticalLayout {
             height: scroll.content-height;
             size: root.desktop ? 128px : 168px;
             system-proxy: root.desktop;
+            pull: !root.desktop;
             open-configs => {
                 AppState.current-tab = 1;
                 root.screen = 1;
